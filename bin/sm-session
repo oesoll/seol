@@ -1,0 +1,759 @@
+#!/usr/bin/env python3
+"""sm session commands (all machines). On the Mac, `sm` forwards these verbs here; on Linux `sm` is this."""
+import argparse
+import difflib
+import subprocess
+import shlex
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import peer_core  # noqa: E402
+import sm_session as sm  # noqa: E402
+import sm_layout as lay  # noqa: E402
+import os  # noqa: E402
+
+HELP = '''sm — sessions: where agents live and whether they are alive (tmux's job, without tmux)
+
+  sm spawn NAME --kind claude|codex|omo|shell [--cwd DIR] [--host HOST] [--pane UUID | --visible]
+           [--env K=V]... [--fresh] [-- ccv/ccx args]
+        Start NAME through ccv/ccx under its own peer-hold. The name is the session:
+        running → returns it (no second copy); ended or died → resumes it (ccv/ccx -ry).
+        --fresh starts a new engine session under an ended name. --pane binds an sm panel.
+  sm attach NAME[@HOST] [--passive] [--no-screen]   Show NAME here; not running → resumed first (--no-screen:
+                            the app draws the last screen and dims it; attach paints nothing itself). Size follows
+                            the viewer that last typed; --passive never sets it (side views)
+  sm resume NAME[@HOST] [-- ARGS]   Bring NAME back (same engine session, same history); ARGS such as -m MODEL
+                            apply to the resumed conversation. Spawning an ended name does the same.
+  sm stop NAME[@HOST]       End NAME on purpose (stays ended; restore leaves it)
+  sm ls [--host HOST] [--ws WS] [--background]
+                            Sessions with status and peer state; --ws: under that workspace's folder,
+                            --background: not shown in any pane (what a new pane can bring in)
+  sm tail NAME[@HOST] [--lines N] [--raw]   Recent screen text without attaching
+  sm feedback "TEXT"        Something in sm/peer got in your way? One line; it reaches sm's owner with the commands
+                            you ran just before. No TEXT: the recent ones
+  sm usage [--hours 24] [--host H]   What agents ran with sm here: runs, failures, slow ones, recent errors
+  sm keys NAME[@HOST] KEY…   Type into NAME (tmux send-keys: Enter Down Esc C-c …, other words as text) and show
+                            the screen. For an agent you started that is stuck on a screen before peer reaches it;
+                            read it first (sm tail) — a choice that is the user's to make is not yours to answer
+  sm run HOST [--cwd DIR] -- CMD [ARGS…]   Run a command on any machine (ssh where it reaches, else the
+                            relay tunnel — Arch → Mac works although the Mac has no ssh login)
+  sm cp [HOST:]SRC [HOST:]DST   Copy files or folders between machines, any direction
+  sm where [NAME[@HOST]]    Where NAME runs and is shown: host, workspace/tab/pane (null if none), fine_tab,
+                            on_screen (a screen shows it now), last_seen. No NAME: yourself
+  sm state NAME[@HOST] [--watch]   What a screen should show: asleep|stopped|waking|ready|tmux|gone (one JSON
+                            line per change with --watch, plus a heartbeat every 20 s)
+  sm screen NAME[@HOST]     The last screen's bytes, kept when the agent ended (for apps drawing a frozen frame)
+  sm restore                Resume every session whose holder died (reboot); runs at login
+  sm upgrade [--dry-run]    Restart sessions running an older claude/codex or harness than is installed, once idle
+                            (5 min off screen, 30 on it), same conversation; Codex is kept at the latest release.
+                            sm sleep does this every 10 min
+  sm sleep [--after MIN] [--dry-run]   End agents idle past the prompt cache (65 min); they wake on use:
+                            opening the pane (attach), a peer message, or the notch. Runs every 10 min.
+  sm wake NAME[@HOST]       Wake a sleeping session (peer does this when a message arrives)
+  sm awake NAME[@HOST] [--off]   Never put NAME to sleep (customer lanes reached by tmux address, …)
+  sm adopt TMUX_SESSION [--ws NAME] [--name %PANE=NAME]... [--dry-run]
+                            tmux windows/panes → sm workspace; register its agents (names: peer's, label, or given)
+  sm migrate NAME [--force] idle adopted agent → same engine session under sm; its tmux pane becomes a viewer
+
+Layout (tmux's windows and panes, as data on the machine where the workspace runs):
+  sm ws new NAME [--cwd DIR] | sm ws ls | sm ws rm NAME | sm layout [WS]   workspaces and their full layout
+                            (rm leaves its sessions running). new and rm also update the user's sidebar on the Mac
+  sm ws move WS INDEX|first|last|up|down|--before WS|--after WS · sm ws rename WS NAME · sm ws select WS
+                            the user's sidebar: order, the name the user sees, which one is on screen (from any machine)
+  sm watch [--ws WS]        one JSON line per layout change (for apps; one ssh per remote workspace)
+  sm tab new [--name N] [--spawn NAME --kind K [-- args] | --attach NAME] [--focus]   one step: tab + its agent
+  sm tab select|close TAB | sm tab rename TAB NAME | sm tab ls
+  sm tab move TAB INDEX|first|last|left|right | sm tab move TAB --before|--after TAB
+  sm split [PANE | --tab TAB] [--right|--down|--left|--up] [--size 0.3] [--spawn NAME --kind K [-- args] | --attach NAME | --shell] [--focus]
+                            --tab: beside that tab's focused pane; a tab that does not exist yet is made
+  sm arrange [TAB] columns|rows|grid|main-left|main-top [--main PANE] [--size 0.6]
+                            tmux select-layout in one step: side by side, stacked, tiles, or one main pane
+                            (--main, else the first) with the rest beside/below it. Order and sessions stay.
+  sm resize PANE [--width 0.4] [--height 0.3] [--toward next|prev]
+                            share of its row / column; --toward: only that neighbour gives or takes (border drag)
+  sm focus PANE · sm zoom PANE · sm swap A B · sm close PANE · sm move PANE --tab TAB [--focus]
+                            move into a tab that does not exist makes it; moving a tab's only pane takes the tab along
+  sm show NAME[@HOST]       Put NAME (or a workspace) in front of the user on the Mac — from any machine
+  What the user sees changes only when you ask: split, move, tab new and arrange leave the user's tab and focus where
+  they were (tmux's -d); --focus, sm focus, sm tab select and sm show move them. Every change prints the new shape:
+    flat@arch  main*: [flat-main* | (flat-qa / flat-rev)] · workers: [w1 | w2]   (* = what the user sees, | beside, / stacked)
+  PANE is a session name (flat-qa), a pane id (p-1a2b3c) or TAB.N (main.0). The workspace comes from
+  --ws WS[@HOST], else $SM_WORKSPACE (set inside sm panes), else the workspace whose folder holds cwd.
+  Closing a pane or tab leaves its session running in the background; sm stop ends a session.
+
+  --json on any command prints JSON. Talking to sessions is peer's job: peer say NAME "...".'''
+
+
+def split(target, host=None):
+    if '@' in target:
+        name, owner = target.rsplit('@', 1)
+        return name, owner
+    return target, host or peer_core.host()
+
+
+def emit(value, as_json):
+    if as_json or not isinstance(value, dict):
+        print(json.dumps(value, ensure_ascii=False))
+        return
+    if 'sessions' in value:
+        for row in value['sessions']:
+            where = 'pane ' + row['pane'][:8] if row.get('pane') else ('visible' if row.get('visible') else 'background')
+            print(f"{row['name']:<24} {row['kind']:<6} {row['status']:<8} {str(row.get('state') or '-'):<10} {where:<14} {row['cwd']}")
+            why = (row.get('peer') or {}).get('reason')
+            if row.get('state') == 'error' and why not in (None, 'app-server', 'turn-failed'):
+                print('  └ ' + why)  # a usage limit reads the same as a crash without this (11/07 sm feedback)
+        if not value['sessions']:
+            print('no sm sessions on ' + value.get('host', ''))
+        return
+    if 'restored' in value:
+        for row in value['restored']:
+            print(row.get('action'), row.get('name'), row.get('error') or '')
+        return
+    print(f"{value['action']} · {value['name']}@{value['host']} · {value['status']}"
+          + (f" · {value['peer']['state']}" if value.get('peer') else ' · not registered yet'))
+
+
+def screen_facts(entry):
+    """Whether a screen shows it now (an sm or Fine pane attached; tmux leftovers don't count) and when one last did."""
+    if not entry or sm.status(entry) != 'running':
+        return dict(on_screen=False, last_seen=None)
+    st = sm.holder_status(entry)
+    return dict(on_screen=st.get('active', st.get('viewers', 0)) > 0, last_seen=st.get('seen') or None)
+
+
+def shown_in_fine(wanted):
+    """The Fine tab that shows the session now, from Fine's saved windows. A session brought in with `fine attach` or
+    `sm to-fine` has no FINE_TAB_ID of its own, so the env alone answered null and the agent concluded Fine did not
+    show it (11/11, bkk-plan). None when Fine is not here or does not show it — then the env is the best guess."""
+    try:
+        windows = json.loads((Path.home() / '.fine' / 'window-states.json').read_text())
+    except (OSError, ValueError):
+        return None
+    for window in windows if isinstance(windows, list) else []:
+        for tab in window.get('sessions') or []:
+            if (tab.get('smSessionName') or '').lower() == wanted:
+                return (tab.get('id') or '').lower() or None
+    return None
+
+
+def where(name):
+    """Where NAME is shown on this machine: workspace, tab, pane (first match, names compared case-insensitively
+    because Fine lowercases notch sources), plus the session's status. pane is null when no pane shows it."""
+    wanted = name.lower()
+    entry = next((e for e in sm.entries() if e['name'].lower() == wanted), None)
+    fine_tab = shown_in_fine(wanted)
+    if fine_tab is None:
+        fine_tab = next((e.split('=', 1)[1] for e in (entry or {}).get('env', []) if e.startswith('FINE_TAB_ID=')), None)
+    for ws in lay.ws_list():
+        for tab in ws['tabs']:
+            for pane in lay.leaves(tab['root']):
+                shown = (ws['panes'].get(pane) or {}).get('session') or ''
+                if shown.lower() == wanted:
+                    return dict(name=shown, host=peer_core.host(), workspace=ws['workspace'], tab=tab['id'], tab_name=tab['name'],
+                                pane=pane, status=sm.status(entry) if entry else None, fine_tab=fine_tab, **screen_facts(entry))
+    if entry:
+        cwd = entry['cwd']
+        ws = next((w for w in lay.ws_list() if cwd == w['cwd'] or cwd.startswith(w['cwd'].rstrip('/') + '/')), None)
+        return dict(name=entry['name'], host=peer_core.host(), workspace=ws and ws['workspace'], tab=None, tab_name=None,
+                    pane=None, status=sm.status(entry), fine_tab=fine_tab, **screen_facts(entry))  # fine_tab: shown in that Fine tab
+    raise ValueError('no session named ' + name + ' on ' + peer_core.host())
+
+
+def place(spec):
+    """'arch:~/x' → ('arch', '~/x'); a plain path (or an unknown prefix) is local."""
+    from peer_transport import hosts
+    head, sep, tail = spec.partition(':')
+    if sep and (head in hosts() or head == peer_core.host()) and '/' not in head:
+        return head, tail
+    return peer_core.host(), spec
+
+
+def copy(src, dst):
+    """Copy a file or folder between any two machines: scp where ssh reaches, the relay where it doesn't."""
+    import tempfile, peer_remote
+    (sh, sp), (dh, dp) = place(src), place(dst)
+    me = peer_core.host()
+    if sh == me and dh == me:
+        sys.exit(subprocess.run(['cp', '-R', os.path.expanduser(sp), os.path.expanduser(dp)]).returncode)
+    direct_src, direct_dst = (sh == me or sm.direct(sh)), (dh == me or sm.direct(dh))
+    if direct_src and direct_dst and me in (sh, dh):
+        a = sp if sh == me else sm.direct(sh) + ':' + sp
+        b = dp if dh == me else sm.direct(dh) + ':' + dp
+        sys.exit(subprocess.run(['scp', '-r', '-q'] + sm.SHORT + [os.path.expanduser(a) if sh == me else a,
+                                 os.path.expanduser(b) if dh == me else b]).returncode)
+    # Through here: fetch to a local temp (tar for folders), then deliver.
+    with tempfile.TemporaryDirectory(prefix='smcp') as tmp:
+        tmp = Path(tmp)
+        if sh == me:
+            local = Path(os.path.expanduser(sp))
+        else:
+            is_dir = remote_test(sh, sp)
+            local = tmp / (Path(sp).name or 'src')
+            if is_dir:
+                tarball = '/tmp/smcp-' + secrets_hex() + '.tar'
+                remote_ok(sh, TAR + ['-C', os.path.dirname(sp.rstrip('/')) or '.', '-cf', tarball, Path(sp.rstrip('/')).name])
+                fetch(sh, tarball, tmp / 'src.tar'); remote_ok(sh, ['rm', '-f', tarball])
+                subprocess.run(['tar', '-C', str(tmp), '-xf', str(tmp / 'src.tar')], check=True)
+            else:
+                fetch(sh, sp, local)
+        if dh == me:
+            sys.exit(subprocess.run(['cp', '-R', str(local), os.path.expanduser(dp)]).returncode)
+        if local.is_dir():
+            tarball = tmp / 'dst.tar'
+            subprocess.run(TAR + ['-C', str(local.parent), '-cf', str(tarball), local.name], check=True)
+            stamp = secrets_hex()
+            remote_tar, unpack = '/tmp/smcp-' + stamp + '.tar', '/tmp/smcp-' + stamp + '.d'
+            deliver(dh, tarball, remote_tar)
+            # like cp -R / scp -r: into DST if it is a folder, otherwise DST becomes the copy
+            target = dp.rstrip('/') + '/' + local.name if remote_test(dh, dp) else dp
+            remote_ok(dh, ['mkdir', '-p', unpack]); remote_ok(dh, ['tar', '-C', unpack, '-xf', remote_tar])
+            remote_ok(dh, ['mv', unpack + '/' + local.name, target]); remote_ok(dh, ['rm', '-rf', remote_tar, unpack])
+        else:
+            deliver(dh, local, dp)
+
+
+# tar without macOS metadata (provenance xattrs make Linux tar warn); env keeps Apple's copyfile out too
+TAR = ['env', 'COPYFILE_DISABLE=1', 'tar', '--no-xattrs']
+
+
+def secrets_hex():
+    import secrets
+    return secrets.token_hex(4)
+
+
+def remote_ok(host, argv):
+    import io, peer_remote
+    if sm.direct(host):
+        line = ' '.join('~/' + shlex.quote(a[2:]) if a.startswith('~/') else ('~' if a == '~' else shlex.quote(a)) for a in argv)
+        r = subprocess.run(['ssh'] + sm.SHORT + [sm.direct(host), line], capture_output=True)
+        code = r.returncode
+    else:
+        code = peer_remote.run(host, argv, out=io.BytesIO(), err=io.BytesIO())
+    if code:
+        raise ValueError(host + ': ' + ' '.join(argv[:2]) + ' failed')
+
+
+def remote_test(host, path):
+    try:
+        remote_ok(host, ['test', '-d', path])
+        return True
+    except ValueError:
+        return False
+
+
+def fetch(host, src, dst):
+    import peer_remote
+    if sm.direct(host):
+        subprocess.run(['scp', '-q'] + sm.SHORT + [sm.direct(host) + ':' + src, str(dst)], check=True)
+    else:
+        peer_remote.get(host, src, dst)
+
+
+def deliver(host, src, dst):
+    import peer_remote
+    if sm.direct(host):
+        subprocess.run(['scp', '-q'] + sm.SHORT + [str(src), sm.direct(host) + ':' + dst], check=True)
+    else:
+        peer_remote.put(host, src, dst)
+
+
+LAYOUT_VERBS = ('ws', 'tab', 'layout', 'watch', 'split', 'resize', 'focus', 'zoom', 'swap', 'close', 'move', 'bind', 'arrange')
+
+
+def pick_workspace(flag):
+    """--ws WS[@HOST] > $SM_WORKSPACE > the workspace whose folder contains cwd (deepest wins)."""
+    if flag:
+        return split(flag)
+    if os.environ.get('SM_WORKSPACE'):
+        return split(os.environ['SM_WORKSPACE'])
+    here = os.path.realpath(os.getcwd())
+    best = None
+    for ws in lay.ws_list():
+        root = ws.get('cwd', '')
+        if (here == root or here.startswith(root.rstrip('/') + '/')) and (not best or len(root) > len(best['cwd'])):
+            best = ws
+    if not best:
+        raise ValueError('which workspace? pass --ws WS (sm ws ls)')
+    return best['workspace'], peer_core.host()
+
+
+def is_app_host():
+    return os.environ.get('SM_APP_HOST', 'mac') == peer_core.host()
+
+
+def to_app(args, quiet=False):
+    """Run the Mac app's `sm ARGS` (the user's sidebar, the notch, showing a pane): on the Mac directly, elsewhere
+    through `sm run mac`. quiet: return its answer instead of printing, and never fail the caller over it."""
+    app_host = os.environ.get('SM_APP_HOST', 'mac')
+    line = ('"$HOME/.smux/bin/sm-session" ' if args[:1] == ['feedback'] else 'PATH="$HOME/bin:$HOME/.local/bin:$PATH" sm ') + shlex.join(args)
+    cmd = ['/bin/sh', '-c', line] if is_app_host() else [sys.executable, os.path.abspath(__file__), 'run', app_host, '--', '/bin/sh', '-c', line]
+    if not quiet:
+        sys.exit(subprocess.run(cmd).returncode)
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return (out.stdout.strip().splitlines() or [''])[0] if out.returncode == 0 else 'not in the sidebar: ' + out.stderr.strip()[-200:]
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return 'not in the sidebar: ' + str(error)
+
+
+def require_session_here(name, workspace):
+    """A pane must be able to attach to what it names: a session on this machine, or NAME@HOST on a machine ssh reaches.
+    Anything else looked fine and then only ever showed "reconnecting" (11/07 sm feedback), so say so while it can
+    still be fixed. Arch -> Mac is the usual case: it goes through the relay, which cannot carry a screen."""
+    bare, owner = split(name)
+    if owner != peer_core.host():
+        if sm.direct(owner):
+            return
+        raise ValueError(name + ' cannot be shown in a pane of ' + workspace + ' on ' + peer_core.host() + ': ' + owner
+                         + ' is reached through the relay, which cannot carry a screen. Start one here instead: '
+                         'sm split --spawn NAME --kind claude|codex --ws ' + workspace)
+    if not sm.read(sm.entry_path(bare)):
+        raise ValueError('no session ' + name + ' on ' + peer_core.host() + ', where workspace ' + workspace
+                         + ' runs (sm ls). For another machine name it NAME@HOST. Start one here instead: '
+                         'sm split --spawn NAME --kind claude|codex --ws ' + workspace)
+
+
+def layout_command(verb, rest, as_json):
+    ws_flag = None
+    if '--ws' in rest:
+        i = rest.index('--ws'); ws_flag = rest[i + 1]; rest = rest[:i] + rest[i + 2:]
+    if verb == 'ws':
+        sub = rest[0] if rest else 'ls'
+        no_app = '--no-app' in rest  # the Mac app's own call: it updates the sidebar itself
+        rest = [x for x in rest if x != '--no-app']
+        if sub in ('move', 'rename', 'select', 'show'):
+            # the user's sidebar (order, names, which one is shown) lives in the Mac app; same command from any machine.
+            if len(rest) < 2:
+                raise ValueError('usage: sm ws move WS INDEX|first|last|up|down|--before WS|--after WS | sm ws rename WS NAME | sm ws select WS')
+            target = rest[1] if '@' in rest[1] else rest[1] + '@' + peer_core.host()
+            to_app(['ws', sub, target] + rest[2:]); return
+        if sub == 'new':
+            p = argparse.ArgumentParser(prog='sm ws new'); p.add_argument('name'); p.add_argument('--cwd', default='.')
+            a = p.parse_args(rest[1:]); name, host = split(a.name)
+            value = lay.ws_new(name, a.cwd) if host == peer_core.host() else \
+                json.loads(sm.remote(host, ['ws', 'new', name, '--cwd', a.cwd, '--json'] + (['--no-app'] if no_app else [])))
+            if host == peer_core.host() and not no_app and not is_app_host():
+                # Made here (Arch): put it in the user's sidebar too, without switching the user's view.
+                note = to_app(['ws', 'new', name + '@' + host, '--cwd', value['cwd']], quiet=True)
+                value['sidebar'] = note
+            if not as_json and isinstance(value, dict) and value.get('tabs'):
+                print(lay.shape(value) + '   ' + value['cwd'].replace(os.path.expanduser('~'), '~'))
+                if value.get('sidebar'):
+                    print('  sidebar: ' + value['sidebar'].split(' · ')[-1])
+                print('  next: sm tab new --ws ' + name + ' --name NAME --spawn NAME --kind claude | sm split --ws ' + name + ' --spawn NAME --kind codex')
+                return
+        elif sub in ('rm', 'remove', 'delete'):
+            if len(rest) != 2:
+                raise ValueError('usage: sm ws rm NAME   (its sessions keep running; sm stop ends them)')
+            name, host = split(rest[1])
+            if host != peer_core.host():
+                sys.stdout.buffer.write(sm.remote(host, ['ws', 'rm', name] + (['--json'] if as_json else []) + (['--no-app'] if no_app else [])))
+                return
+            value = lay.ws_rm(name)
+            if not no_app and not is_app_host():
+                value['sidebar'] = to_app(['ws', 'rm', name + '@' + host], quiet=True)
+            if not as_json:
+                print('removed workspace ' + name + (' — still running in the background: ' + ', '.join(value['sessions'])
+                                                      if value['sessions'] else '') + ('\n  ' + value['sidebar'] if value.get('sidebar') else ''))
+                return
+        elif sub in ('ls', 'list'):
+            value = [dict(workspace=w['workspace'], host=w['host'], cwd=w['cwd'], tabs=len(w['tabs']), version=w['version']) for w in lay.ws_list()]
+            if not as_json:
+                for w in lay.ws_list():
+                    print(lay.shape(w) + '   ' + w['cwd'].replace(os.path.expanduser('~'), '~'))
+                return
+        else:
+            raise ValueError('sm ws: no ' + sub + '; sm ws new NAME [--cwd DIR] | sm ws ls | sm ws rm NAME')
+        print(json.dumps(value, ensure_ascii=False, indent=None if as_json else 1)); return
+    if verb == 'layout' and rest and not rest[0].startswith('-'):
+        ws_flag = rest[0]; rest = rest[1:]
+    name, host = pick_workspace(ws_flag)
+    if host != peer_core.host():
+        forward = [verb] + rest + ['--ws', name] + (['--json'] if as_json else [])
+        if verb == 'watch':
+            sm.stream(host, forward)  # never returns: one line per layout change, straight through ssh
+        sys.stdout.buffer.write(sm.remote(host, forward)); return
+    extra = rest[rest.index('--') + 1:] if '--' in rest else []
+    rest = rest[:rest.index('--')] if '--' in rest else rest
+    value = None
+    shown_before = {i.get('session') for i in lay.load(name)['panes'].values() if i.get('session')} \
+        if verb == 'close' or (verb == 'tab' and rest[:1] == ['close']) else set()
+    if verb == 'watch':
+        for ws in lay.watch(name):
+            print(json.dumps(ws, ensure_ascii=False), flush=True)
+        return
+    if verb == 'layout':
+        value = lay.load(name)
+    elif verb == 'tab':
+        sub, args = (rest[0], rest[1:]) if rest else ('ls', [])
+        if sub == 'new':
+            p = argparse.ArgumentParser(prog='sm tab new'); p.add_argument('--name'); p.add_argument('--after')
+            p.add_argument('--spawn'); p.add_argument('--kind', default='claude'); p.add_argument('--attach'); p.add_argument('--cwd')
+            p.add_argument('--focus', action='store_true', help="also bring the tab to the user's screen (default: leave the user's view as it is)")
+            a = p.parse_args(args)
+            if a.attach:
+                require_session_here(a.attach, name)
+            tab = lay.tab_new(name, a.name, a.after, a.spawn or a.attach, focus=a.focus)
+            pane = tab['focus']
+            value = dict(tab=tab['id'], pane=pane)
+            if a.spawn:
+                try:
+                    ws = lay.load(name)
+                    value['session'] = sm.spawn(a.spawn, a.kind, a.cwd or ws['cwd'], pane=pane, env=['SM_WORKSPACE=' + name],
+                                                args=extra, timeout=20)
+                except Exception:
+                    lay.tab_close(name, tab['id'])  # all or nothing: no half-made tab
+                    raise
+        elif sub in ('select', 'close') and len(args) == 1:
+            (lay.tab_select if sub == 'select' else lay.tab_close)(name, args[0])
+        elif sub == 'rename' and len(args) == 2:
+            lay.tab_rename(name, args[0], args[1])
+        elif sub == 'move' and len(args) == 3 and args[1] in ('--before', '--after'):
+            lay.tab_move(name, args[0], args[1][2:] + ':' + args[2])
+        elif sub == 'move' and len(args) == 2:
+            lay.tab_move(name, args[0], args[1])
+        elif sub in ('ls', 'list') and not args:
+            value = [dict(id=t['id'], name=t['name'], panes=lay.leaves(t['root'])) for t in lay.load(name)['tabs']]
+            if not as_json:
+                print(lay.shape(lay.load(name))); return
+        else:
+            raise ValueError('usage: sm tab new [--name N] [--spawn NAME --kind K | --attach NAME] [--focus] | '
+                             'sm tab select|close TAB | sm tab rename TAB NAME | sm tab move TAB INDEX|first|last|left|right|--before T|--after T | sm tab ls')
+    elif verb == 'split':
+        p = argparse.ArgumentParser(prog='sm split'); p.add_argument('target', nargs='?')
+        for d in ('right', 'down', 'left', 'up'):
+            p.add_argument('--' + d, dest='where', action='store_const', const=d)
+        p.add_argument('--size', type=float, default=0.5); p.add_argument('--spawn'); p.add_argument('--kind', default='claude')
+        p.add_argument('--attach'); p.add_argument('--shell', action='store_true'); p.add_argument('--cwd')
+        p.add_argument('--tab', help='beside the focused pane of that tab; a tab that does not exist yet is made')
+        p.add_argument('--focus', action='store_true', help="the new pane takes focus and its tab comes to the user's screen")
+        a = p.parse_args(rest)
+        session = a.spawn or a.attach
+        if a.attach:
+            require_session_here(a.attach, name)
+        if a.spawn and a.kind not in ('claude', 'codex', 'omo', 'shell'):
+            raise ValueError('--kind is claude, codex, omo or shell')
+        if a.target and a.tab:
+            raise ValueError('sm split: give a PANE or --tab TAB, not both')
+        shell = (a.shell or not session) and a.kind != 'shell'
+        if a.tab:
+            try:
+                a.target = lay.find_tab(lay.load(name), a.tab)[1]['focus']
+                pane = lay.split(name, a.target, a.where or 'right', a.size, session, shell, focus=a.focus)
+            except ValueError as missing:
+                if not str(missing).startswith('no tab'):
+                    raise
+                pane = lay.tab_new(name, a.tab, None, session, focus=a.focus)['focus']
+        else:
+            pane = lay.split(name, a.target, a.where or 'right', a.size, session, shell, focus=a.focus)
+        if a.spawn:
+            try:
+                ws = lay.load(name)
+                spawned = sm.spawn(a.spawn, a.kind, a.cwd or ws['cwd'], pane=pane, env=['SM_WORKSPACE=' + name], args=extra,
+                                   parent=None, timeout=20)
+            except Exception:
+                lay.close(name, pane)
+                raise
+            value = dict(pane=pane, session=spawned)
+        else:
+            value = dict(pane=pane)
+    elif verb == 'resize':
+        p = argparse.ArgumentParser(prog='sm resize'); p.add_argument('target'); p.add_argument('--width', type=float); p.add_argument('--height', type=float)
+        p.add_argument('--toward', choices=('next', 'prev'))
+        a = p.parse_args(rest); lay.resize(name, a.target, a.width, a.height, a.toward)
+    elif verb in ('focus', 'zoom', 'close'):
+        if len(rest) != 1:
+            raise ValueError('usage: sm ' + verb + ' PANE   (a session name, a pane id or TAB.N; sm layout shows them)')
+        getattr(lay, verb)(name, rest[0])
+    elif verb == 'swap':
+        if len(rest) != 2:
+            raise ValueError('usage: sm swap PANE PANE')
+        lay.swap(name, rest[0], rest[1])
+    elif verb == 'move':
+        p = argparse.ArgumentParser(prog='sm move'); p.add_argument('target'); p.add_argument('--tab', required=True)
+        for d in ('right', 'down', 'left', 'up'):
+            p.add_argument('--' + d, dest='where', action='store_const', const=d)
+        p.add_argument('--size', type=float, default=0.5)
+        p.add_argument('--focus', action='store_true', help="bring that tab to the user's screen with the pane focused")
+        a = p.parse_args(rest); value = dict(pane=lay.move(name, a.target, a.tab, a.where or 'right', a.size, focus=a.focus))
+    elif verb == 'arrange':
+        p = argparse.ArgumentParser(prog='sm arrange', description='tmux select-layout: ' + ', '.join(sorted(set(lay.PRESETS.values()))))
+        p.add_argument('words', nargs='+', metavar='[TAB] LAYOUT'); p.add_argument('--main'); p.add_argument('--size', type=float, default=0.6)
+        a = p.parse_args(rest)
+        if len(a.words) > 2:
+            raise ValueError('usage: sm arrange [TAB] columns|rows|grid|main-left|main-top [--main PANE] [--size 0.6]')
+        tab_ref, preset = (a.words[0], a.words[1]) if len(a.words) == 2 else (None, a.words[0])
+        if tab_ref and tab_ref in lay.PRESETS and preset not in lay.PRESETS:
+            tab_ref, preset = preset, tab_ref  # sm arrange grid workers
+        value = dict(tab=lay.arrange(name, tab_ref, preset, a.main, a.size))
+    elif verb == 'bind':
+        value = dict(pane=lay.bind(name, rest[0], rest[1]))
+    if value is None:
+        value = dict(ok=True)
+    if isinstance(value, dict) and verb != 'layout':
+        # The version this change produced, so an app can tell its own edit from someone else's.
+        value.update(workspace=name, version=lay.load(name)['version'])
+    if as_json:
+        print(json.dumps(value, ensure_ascii=False))
+        return
+    # People and agents: the new shape in one line, so nobody calls again to check what happened.
+    ws = lay.load(name)
+    print(lay.shape(ws))
+    if verb == 'layout':
+        for tab in ws['tabs']:
+            for i, pane in enumerate(lay.leaves(tab['root'])):
+                print('  ' + tab['name'] + '.' + str(i) + '  ' + pane + '  ' + lay.describe_pane(ws, tab, pane))
+        return
+    left = sorted(shown_before - {i.get('session') for i in ws['panes'].values() if i.get('session')})
+    if left:
+        print('  still running in the background: ' + ', '.join(left) + ' (sm stop NAME ends one; sm split --attach NAME shows it again)')
+    session = value.get('session') if isinstance(value, dict) else None
+    if isinstance(session, dict):
+        print('  ' + ' '.join(str(session.get(k)) for k in ('name', 'status') if session.get(k)))
+    shown = value.get('pane') if isinstance(value, dict) else None
+    tab = ws['tabs'] and lay.find_tab(ws, ws['active_tab'])[1]
+    if shown and verb in ('split', 'move', 'tab') and tab and shown not in lay.leaves(tab['root']):
+        owner = lay.resolve(ws, shown)[0]
+        session_name = ws['panes'].get(shown, {}).get('session')
+        print("  the user's screen stays on tab " + tab['name'] + '; to show it: '
+              + ('sm show ' + session_name if session_name else 'sm tab select ' + owner['name']))
+
+
+def main(argv):
+    as_json = '--json' in argv
+    argv = [a for a in argv if a != '--json']
+    if not argv or argv[0] in ('-h', '--help', 'help'):
+        print(HELP)
+        return
+    verb, rest = argv[0], argv[1:]
+    # Agents reach for `sm list` first (11/09 fine-82515b0d, twice); difflib offered `split` for it.
+    verb = {'list': 'ls'}.get(verb, verb)
+    if verb == 'spawn':
+        extra = rest[rest.index('--') + 1:] if '--' in rest else []
+        prefix = rest[:rest.index('--')] if '--' in rest else rest
+        p = argparse.ArgumentParser(prog='sm spawn')
+        p.add_argument('name'); p.add_argument('--kind', required=True, choices=('claude', 'codex', 'omo', 'shell'))
+        p.add_argument('--cwd', default='.'); p.add_argument('--host'); p.add_argument('--pane')
+        p.add_argument('--visible', action='store_true'); p.add_argument('--env', action='append', default=[])
+        p.add_argument('--fresh', action='store_true'); p.add_argument('--parent'); p.add_argument('--timeout', type=float, default=30)
+        p.add_argument('--ask', action='store_true', help='keep permission/approval prompts (default: claude/codex skip them, -y)')
+        a = p.parse_args(prefix)
+        name, host = split(a.name, a.host)
+        parent = a.parent
+        if not parent:
+            mine = peer_core.me(required=False)
+            parent = peer_core.host() + '/' + mine['id'] if mine else None
+        if host != peer_core.host():
+            forward = ['spawn', name, '--kind', a.kind, '--cwd', a.cwd, '--timeout', str(min(a.timeout, 40)), '--json']
+            forward += (['--pane', a.pane] if a.pane else []) + (['--visible'] if a.visible else [])
+            forward += [x for e in a.env for x in ('--env', e)] + (['--fresh'] if a.fresh else [])
+            forward += (['--parent', parent] if parent else []) + (['--ask'] if a.ask else []) + (['--'] + extra if extra else [])
+            value = json.loads(sm.remote(host, forward))
+        else:
+            value = sm.spawn(name, a.kind, a.cwd, a.pane, a.visible, a.env, extra, parent, a.fresh, a.timeout, a.ask)
+        emit(value, as_json)
+    elif verb == 'feedback':
+        # sm feedback "what got in the way" — one line to sm's owner, with the commands you ran just before.
+        import sm_usage
+        if rest[:1] in (['-h'], ['--help'], ['help']):
+            print('usage: sm feedback "what got in the way"   one line to sm\'s owner, with the commands you ran just before\n'
+                  '       sm feedback                          the recent ones')
+            return
+        if rest[:1] == ['--keep']:  # delivered from another machine
+            print(sm_usage.keep_feedback(json.loads(rest[1]))); return
+        if not rest:
+            print(sm_usage.list_feedback()); return
+        quiet = lambda args: to_app(args, quiet=True)
+        print(sm_usage.feedback(' '.join(rest), is_app_host(), quiet))
+    elif verb == 'usage':
+        import sm_usage
+        p = argparse.ArgumentParser(prog='sm usage'); p.add_argument('--hours', type=float, default=24); p.add_argument('--host')
+        a = p.parse_args(rest)
+        if a.host and a.host != peer_core.host():
+            sys.stdout.buffer.write(sm.remote(a.host, ['usage', '--hours', str(a.hours)] + (['--json'] if as_json else []))); return
+        print(sm_usage.report(a.hours, as_json))
+    elif verb == 'keys':
+        # sm keys NAME KEY…  (tmux send-keys): answer a screen that stops an agent you started, then see the result.
+        if len(rest) < 2:
+            sys.exit('usage: sm keys NAME[@HOST] KEY…   keys: Enter Down Up Left Right Tab S-Tab Esc Space BSpace C-c, '
+                     'anything else is typed as text. Read the screen first: sm tail NAME')
+        name, host = split(rest[0])
+        out = sm.keys(name, rest[1:]) if host == peer_core.host() else sm.remote(host, ['keys', name] + rest[1:])
+        sys.stdout.buffer.write(out)
+    elif verb in ('attach', 'resume', 'stop', 'tail'):
+        # resume NAME -- ARGS: engine options for the resumed conversation (e.g. -m MODEL), after `-ry ID`.
+        extra = rest[rest.index('--') + 1:] if '--' in rest else []
+        rest = rest[:rest.index('--')] if '--' in rest else rest
+        p = argparse.ArgumentParser(prog='sm ' + verb)
+        p.add_argument('target'); p.add_argument('--lines', type=int, default=40); p.add_argument('--raw', action='store_true')
+        p.add_argument('--passive', action='store_true')
+        p.add_argument('--no-screen', action='store_true', help='the app draws the last screen itself (attach only)')
+        a = p.parse_args(rest)
+        name, host = split(a.target)
+        local = host == peer_core.host()
+        if verb == 'attach':
+            if local:
+                sm.attach(name, a.passive, screen=not a.no_screen)
+            sm.remote(host, ['attach', name] + (['--passive'] if a.passive else []) + (['--no-screen'] if a.no_screen else []), tty=True)
+        elif verb == 'tail':
+            out = sm.tail(name, a.lines, a.raw) if local else sm.remote(host, ['tail', name, '--lines', str(a.lines)] + (['--raw'] if a.raw else []))
+            sys.stdout.buffer.write(out)
+        else:
+            forward = [verb, name, '--json'] + (['--'] + extra if verb == 'resume' and extra else [])
+            value = (sm.resume(name, args=extra) if verb == 'resume' else sm.stop(name)) if local else json.loads(sm.remote(host, forward))
+            emit(value, as_json)
+    elif verb == 'ls':
+        p = argparse.ArgumentParser(prog='sm ls'); p.add_argument('--host'); p.add_argument('--ws')
+        p.add_argument('--background', action='store_true', help='only sessions not shown in any pane')
+        a = p.parse_args(rest)
+        if a.ws and '@' in a.ws:
+            a.ws, a.host = split(a.ws)
+        if a.host and a.host != peer_core.host():
+            forward = ['ls', '--json'] + (['--ws', a.ws] if a.ws else []) + (['--background'] if a.background else [])
+            value = json.loads(sm.remote(a.host, forward))
+        else:
+            value = sm.ls()
+            shown = {}
+            for w in lay.ws_list():
+                for pane, info in w.get('panes', {}).items():
+                    if info.get('session'):
+                        shown[info['session']] = w['workspace'] + ':' + pane
+            ws = lay.load(a.ws) if a.ws else None
+            rows = []
+            for row in value['sessions']:
+                row['shown_in'] = shown.get(row['name'])
+                row['pane'] = row['shown_in'].split(':', 1)[1] if row['shown_in'] else None
+                entry = sm.read(sm.entry_path(row['name']))
+                args = entry.get('args', [])
+                row['model'] = next((args[i + 1] for i, x in enumerate(args[:-1]) if x in ('--model', '-m')), None)
+                row['last_active'] = (row.get('peer') or {}).get('observed') or entry.get('started')
+                if ws and not (row['cwd'] == ws['cwd'] or row['cwd'].startswith(ws['cwd'].rstrip('/') + '/')):
+                    continue
+                if a.background and row['shown_in']:
+                    continue
+                rows.append(row)
+            value['sessions'] = rows
+        emit(value, as_json)
+    elif verb == 'restore':
+        emit(sm.restore(), as_json)
+    elif verb == 'sleep':
+        p = argparse.ArgumentParser(prog='sm sleep'); p.add_argument('--after', type=int, default=sm.SLEEP_AFTER // 60,
+                                                                     help='idle minutes (default: past the 1h prompt cache)')
+        p.add_argument('--dry-run', action='store_true')
+        p.add_argument('--no-upgrade', action='store_true', help='skip restarting idle sessions into a newer version')
+        a = p.parse_args(rest)
+        value = sm.sleep(a.after * 60, a.dry_run)
+        if not a.no_upgrade:
+            value.update(sm.upgrade(a.dry_run))  # the same 10-minute job keeps sessions on the installed version
+        print(json.dumps(value, ensure_ascii=False, indent=None if as_json else 1))
+    elif verb == 'upgrade':
+        p = argparse.ArgumentParser(prog='sm upgrade', description='restart idle sessions that run an older engine or harness')
+        p.add_argument('--dry-run', action='store_true'); p.add_argument('--no-engines', action='store_true')
+        p.add_argument('--engines-now', action='store_true', help='check for a new Codex now instead of at most hourly')
+        a = p.parse_args(rest)
+        if a.engines_now:
+            sm.update_engines(force=True)
+        print(json.dumps(sm.upgrade(a.dry_run, engines=not a.no_engines), ensure_ascii=False, indent=None if as_json else 1))
+    elif verb == 'awake':
+        p = argparse.ArgumentParser(prog='sm awake'); p.add_argument('target'); p.add_argument('--off', action='store_true')
+        a = p.parse_args(rest); name, host = split(a.target)
+        if host != peer_core.host():
+            sys.stdout.buffer.write(sm.remote(host, ['awake', name, '--json'] + (['--off'] if a.off else []))); return
+        entry = sm.load(name)
+        if a.off:
+            entry.pop('awake', None)
+        else:
+            entry['awake'] = True
+        sm.write(sm.entry_path(name), entry)
+        print(json.dumps(dict(name=name, awake=bool(entry.get('awake'))), ensure_ascii=False))
+    elif verb == 'wake':
+        name, host = split(rest[0])
+        value = sm.wake(name) if host == peer_core.host() else json.loads(sm.remote(host, ['wake', name, '--json']))
+        emit(value, as_json)
+    elif verb == 'state':
+        p = argparse.ArgumentParser(prog='sm state'); p.add_argument('target'); p.add_argument('--watch', action='store_true')
+        a = p.parse_args(rest); name, host = split(a.target)
+        if host != peer_core.host():
+            forward = ['state', name, '--json'] + (['--watch'] if a.watch else [])
+            sm.stream(host, forward) if a.watch else sys.stdout.buffer.write(sm.remote(host, forward))
+            return
+        if a.watch:
+            for row in sm.watch_state(name):
+                print(json.dumps(row, ensure_ascii=False), flush=True)
+        print(json.dumps(dict(name=name, state=sm.view_state(name), at=__import__('time').time()), ensure_ascii=False))
+    elif verb == 'screen':
+        name, host = split(rest[0])
+        data = sm.last_screen(name) if host == peer_core.host() else sm.remote(host, ['screen', name])
+        sys.stdout.buffer.write(data)
+    elif verb == 'run':
+        # sm run HOST [--cwd DIR] -- CMD ARGS…   (or a single shell string after --)
+        if '--' not in rest or not rest:
+            sys.exit('usage: sm run HOST [--cwd DIR] -- CMD [ARGS…]')
+        head, cmd = rest[:rest.index('--')], rest[rest.index('--') + 1:]
+        p = argparse.ArgumentParser(prog='sm run'); p.add_argument('host'); p.add_argument('--cwd'); a = p.parse_args(head)
+        if len(cmd) == 1 and ' ' in cmd[0]:
+            cmd = ['/bin/sh', '-c', cmd[0]]
+        if a.host == peer_core.host():
+            sys.exit(subprocess.run(cmd, cwd=os.path.expanduser(a.cwd) if a.cwd else None).returncode)
+        alias = sm.direct(a.host)
+        if alias:
+            line = (('cd ' + shlex.quote(a.cwd) + ' && ') if a.cwd else '') + shlex.join(cmd)
+            os.execvp('ssh', ['ssh', '-o', 'ConnectTimeout=5'] + sm.SHORT + [alias, line])
+        import peer_remote
+        sys.exit(peer_remote.run(a.host, cmd, a.cwd))
+    elif verb == 'cp':
+        if len(rest) != 2:
+            sys.exit('usage: sm cp [HOST:]SRC [HOST:]DST   (folders too; HOST is mac, arch, …)')
+        copy(*rest)
+    elif verb == 'where':
+        # no NAME: this session itself (an agent asking where it runs and where the user sees it)
+        name, host = split(rest[0]) if rest else (os.environ.get('PEER_NAME'), peer_core.host())
+        if not name:
+            sys.exit('usage: sm where NAME[@HOST]  (inside an sm session, plain `sm where` means yourself)')
+        value = where(name) if host == peer_core.host() else json.loads(sm.remote(host, ['where', name, '--json']))
+        print(json.dumps(value, ensure_ascii=False, indent=None if as_json else 1))
+    elif verb in ('adopt', 'migrate'):
+        import sm_migrate
+        p = argparse.ArgumentParser(prog='sm ' + verb); p.add_argument('target')
+        p.add_argument('--ws'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--force', action='store_true')
+        p.add_argument('--name', action='append', default=[], help='%%PANE=NAME: the sm name for that pane (adopt)')
+        a = p.parse_args(rest)
+        names = dict(item.split('=', 1) for item in a.name)
+        target, host = split(a.target)
+        if host != peer_core.host():
+            forward = [verb, target, '--json'] + (['--ws', a.ws] if a.ws else []) + (['--dry-run'] if a.dry_run else [])
+            forward += (['--force'] if a.force else []) + [x for n in a.name for x in ('--name', n)]
+            sys.stdout.buffer.write(sm.remote(host, forward))
+            return
+        value = sm_migrate.adopt(target, a.ws, a.dry_run, names) if verb == 'adopt' else sm_migrate.migrate(target, a.force)
+        print(json.dumps(value, ensure_ascii=False, indent=None if as_json else 1))
+    elif verb == 'show':
+        # The Mac app puts it in front of the user; from any machine this is the same command (on the Mac, `sm show`
+        # never reaches here — the app CLI takes it).
+        if len(rest) != 1:
+            sys.exit('usage: sm show NAME[@HOST]   (a session, or a workspace name)')
+        to_app(['show', rest[0] if '@' in rest[0] else rest[0] + '@' + peer_core.host()])
+    elif verb in LAYOUT_VERBS:
+        layout_command(verb, rest, as_json)
+    else:
+        known = ['spawn', 'attach', 'resume', 'stop', 'ls', 'tail', 'keys', 'feedback', 'usage', 'upgrade', 'run', 'cp', 'where', 'state', 'screen', 'restore', 'sleep',
+                 'wake', 'awake', 'adopt', 'migrate', 'show'] + list(LAYOUT_VERBS)
+        close = difflib.get_close_matches(verb, known, n=1, cutoff=.6)
+        sys.exit('sm: no command ' + verb + ('; did you mean sm ' + close[0] + '?' if close else '') + ' (sm --help lists them)')
+
+
+if __name__ == '__main__':
+    import sm_usage
+    started = time.monotonic()
+    try:
+        main(sys.argv[1:])
+        outcome = (0, '')
+    except SystemExit as stop:  # sys.exit('sm: …'), argparse (2), sm run's exit code
+        outcome = (stop.code, '') if isinstance(stop.code, int) else ((0, '') if stop.code is None else (1, str(stop.code)))
+    except (ValueError, OSError, TimeoutError) as error:
+        outcome = (1, 'sm: ' + str(error))
+    sm_usage.record(sys.argv[1:], outcome[0], outcome[1] or ('usage error' if outcome[0] == 2 else ''), time.monotonic() - started)
+    sys.exit(outcome[1] or outcome[0])

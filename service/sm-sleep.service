@@ -1,0 +1,6 @@
+[Unit]
+Description=sm: put agent sessions idle past the prompt cache (65 min) to sleep; they wake on use
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '"$HOME/.smux/bin/sm-session" sleep'

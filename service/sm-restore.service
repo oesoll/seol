@@ -1,0 +1,11 @@
+[Unit]
+Description=sm: resume agent sessions whose holder died (reboot, crash) — same name, same engine session
+After=default.target
+
+[Service]
+Type=oneshot
+# Login shell for PATH: claude and codex (or their wrappers) usually live in ~/.local/bin.
+ExecStart=/bin/bash -lc '"$HOME/.smux/bin/sm-session" restore'
+
+[Install]
+WantedBy=default.target

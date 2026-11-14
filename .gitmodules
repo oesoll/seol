@@ -1,0 +1,9 @@
+[submodule "sm"]
+	path = sm
+	url = https://github.com/oesoll/SpaceManager.git
+[submodule "fine"]
+	path = fine
+	url = https://github.com/oesoll/Fine.git
+[submodule "peer"]
+	path = peer
+	url = https://github.com/oesoll/peer.git

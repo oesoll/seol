@@ -1,0 +1,17 @@
+[package]
+name = "peer-hold"
+version = "0.1.0"
+edition = "2021"
+description = "Agent terminal holder: keeps a harness's PTY alive and restores its screen on attach"
+
+[dependencies]
+libc = "0.2"
+vt100 = "0.18.1"
+vte = "0.15.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
