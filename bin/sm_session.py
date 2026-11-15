@@ -309,10 +309,12 @@ def unattended(kind, args, ask=False):
     return ['-y'] + args
 
 
-# --worker: a lead orchestrating a team spawns its Claude workers without Claude's advisor (advisorModel in settings);
-# judgment stays with the lead, and a worker's result is checked by the lead and by a reviewer from the other engine.
-# Opt-in: without it a spawned agent runs with whatever the user's settings say, orchestration or not.
+# --worker: a lead orchestrating a team spawns its workers with the lead-only features of their harness turned off
+# (Claude: the advisor from advisorModel); judgment stays with the lead, and a worker's result is checked by the lead
+# and by a reviewer from another engine. Opt-in: without it a spawned agent runs as the user's settings say. A harness
+# with a lead-only feature of its own adds its line here.
 ADVISOR_OFF = 'CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1'
+WORKER_ENV = {'claude': (ADVISOR_OFF,)}
 
 
 def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=None, fresh=False, timeout=30, ask=False,
@@ -348,8 +350,8 @@ def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=Non
         full_env = ['PEER_NAME=' + name, 'PEER_STATE=' + str(peer_core.root()), 'PEER_CONFIG=' + str(peer_core.config())]
         if parent:
             full_env.append('PEER_PARENT=' + parent)
-        if worker and kind == 'claude':
-            full_env.append(ADVISOR_OFF)
+        if worker:
+            full_env += WORKER_ENV.get(kind, ())
         if pane:
             full_env.append('SM_PANE_ID=' + pane)
         if pane or visible:

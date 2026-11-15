@@ -24,7 +24,7 @@ HELP = '''sm — sessions: where agents live and whether they are alive (tmux's 
         Start NAME through claude/codex (or the wrappers launch.json names) under its own peer-hold. The name is
         the session: running → returns it (no second copy); ended or died → resumes its conversation.
         --fresh starts a new engine session under an ended name. --pane binds an sm panel. --worker: a team
-        lead's Claude worker, started without Claude's advisor (judgment stays with the lead).
+        lead's worker, started without its harness's lead-only features (Claude: the advisor).
   sm attach NAME[@HOST] [--passive] [--no-screen]   Show NAME here; not running → resumed first (--no-screen:
                             the app draws the last screen and dims it; attach paints nothing itself). Size follows
                             the viewer that last typed; --passive never sets it (side views)
@@ -591,7 +591,7 @@ def main(argv):
         p.add_argument('--visible', action='store_true'); p.add_argument('--env', action='append', default=[])
         p.add_argument('--fresh', action='store_true'); p.add_argument('--parent'); p.add_argument('--timeout', type=float, default=30)
         p.add_argument('--ask', action='store_true', help='keep permission/approval prompts (default: claude/codex skip them, -y)')
-        p.add_argument('--worker', action='store_true', help="a team lead's Claude worker: no Claude advisor")
+        p.add_argument('--worker', action='store_true', help="a team lead's worker: its harness's lead-only features off (Claude: the advisor)")
         a = p.parse_args(prefix)
         name, host = split(a.name, a.host)
         parent = a.parent
