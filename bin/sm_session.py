@@ -231,6 +231,8 @@ def trust_folder(cwd, config=None):
 
 def start_holder(entry, command):
     find_launchers()
+    env_vars = clean_env()
+    env_vars['PATH'] = merged_path(env_vars.get('PATH', ''))
     sock = Path(entry['hold'])
     sock.parent.mkdir(parents=True, exist_ok=True)
     if entry.get('kind') == 'claude' and not os.environ.get('SM_TEST_LAUNCHER') \
@@ -241,7 +243,7 @@ def start_holder(entry, command):
     env = list(entry.get('env', []))
     result = subprocess.run(scope_prefix(sock) + [str(BIN / 'peer-hold'), 'start', '--sock', str(sock), '--cwd', entry['cwd']]
                             + [a for e in env for a in ('--env', e)] + ['--'] + command,
-                            capture_output=True, text=True, timeout=15, env=clean_env())
+                            capture_output=True, text=True, timeout=15, env=env_vars)
     if result.returncode:
         raise ValueError(result.stderr.strip() or 'peer-hold did not start')
     entry['started'] = time.time()
@@ -651,6 +653,38 @@ def find_launchers():
     found = re.search(r'^SM_PATH=(.+)$', out, re.M)
     if found:
         os.environ['PATH'] = found.group(1)
+
+
+_user_path = None
+
+
+def user_path():
+    """The PATH the user's own terminal has (an interactive shell reads .zshrc, where ~/bin and the like are added).
+    Read once per process; empty if the shell does not answer."""
+    global _user_path
+    if _user_path is None:
+        _user_path = ''
+        if not os.environ.get('SM_TEST_LAUNCHER'):
+            try:
+                out = subprocess.run([os.environ.get('SHELL') or '/bin/sh', '-ic', 'printf "\\nSM_PATH=%s\\n" "$PATH"'],
+                                     stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20).stdout
+                found = re.search(r'^SM_PATH=(.+)$', out, re.M)
+                _user_path = found.group(1) if found else ''
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _user_path
+
+
+def merged_path(current):
+    """An agent sees the commands the user's terminal sees, wherever `sm spawn` ran: the user's interactive PATH
+    first, then whatever of the caller's PATH it lacks. The caller's PATH alone was the spawner's — an agent started
+    from an app or another agent's shell lacked ~/bin, so home and seol-notch were not found (11/16 sm feedback)."""
+    seen, parts = set(), []
+    for part in (user_path() + ':' + current).split(':'):
+        if part and part not in seen:
+            seen.add(part)
+            parts.append(part)
+    return ':'.join(parts)
 
 
 def tools():
