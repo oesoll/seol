@@ -10,7 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-BIN = Path(__file__).resolve().parents[2] / 'bin'
+# The installed layout (session layer, peer and peer-hold in one folder): tests/run.sh assembles it in SEOL_BIN.
+BIN = Path(os.environ.get('SEOL_BIN') or Path(__file__).resolve().parents[1] / 'bin')
 sys.path.insert(0, str(BIN))
 import sm_layout as lay  # noqa: E402
 
@@ -113,6 +114,22 @@ class LayoutTests(unittest.TestCase):
         lay_out = subprocess.run([sys.executable, str(BIN / 'sm-session'), 'layout', '--json'], cwd=sub, env=env,
                                  capture_output=True, text=True)
         self.assertEqual(json.loads(lay_out.stdout)['tabs'][0]['root']['dir'], 'col')
+
+    def test_a_pane_id_or_name_at_host_finds_its_own_workspace(self):
+        # From a pane of another workspace (SM_WORKSPACE=harness), a pane id or NAME@HOST still means that pane.
+        lay.ws_new('harness', self.temp / 'proj')
+        env = dict(os.environ, SM_WORKSPACE='harness')
+        for ref in (self.first, 'flat-main@test'):
+            out = subprocess.run([sys.executable, str(BIN / 'sm-session'), 'split', ref, '--right', '--json'],
+                                 env=env, capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(len(lay.leaves(lay.load('flat')['tabs'][0]['root'])), 3)
+        self.assertEqual(len(lay.leaves(lay.load('harness')['tabs'][0]['root'])), 1)
+        # a plain name stays relative to the picked workspace
+        out = subprocess.run([sys.executable, str(BIN / 'sm-session'), 'split', 'flat-main', '--json'],
+                             env=env, capture_output=True, text=True)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn('in harness', out.stderr)
 
     def test_watch_yields_on_change(self):
         stream = lay.watch('flat', interval=.01, heartbeat=.05)

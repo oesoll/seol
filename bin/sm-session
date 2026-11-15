@@ -2,8 +2,10 @@
 """sm session commands (all machines). On the Mac, `sm` forwards these verbs here; on Linux `sm` is this."""
 import argparse
 import difflib
+import re
 import subprocess
 import shlex
+import shutil
 import json
 import sys
 import time
@@ -18,9 +20,9 @@ import os  # noqa: E402
 HELP = '''sm — sessions: where agents live and whether they are alive (tmux's job, without tmux)
 
   sm spawn NAME --kind claude|codex|omo|shell [--cwd DIR] [--host HOST] [--pane UUID | --visible]
-           [--env K=V]... [--fresh] [-- ccv/ccx args]
-        Start NAME through ccv/ccx under its own peer-hold. The name is the session:
-        running → returns it (no second copy); ended or died → resumes it (ccv/ccx -ry).
+           [--env K=V]... [--fresh] [-- engine args]
+        Start NAME through claude/codex (or the wrappers launch.json names) under its own peer-hold. The name is
+        the session: running → returns it (no second copy); ended or died → resumes its conversation.
         --fresh starts a new engine session under an ended name. --pane binds an sm panel.
   sm attach NAME[@HOST] [--passive] [--no-screen]   Show NAME here; not running → resumed first (--no-screen:
                             the app draws the last screen and dims it; attach paints nothing itself). Size follows
@@ -80,7 +82,8 @@ Layout (tmux's windows and panes, as data on the machine where the workspace run
   What the user sees changes only when you ask: split, move, tab new and arrange leave the user's tab and focus where
   they were (tmux's -d); --focus, sm focus, sm tab select and sm show move them. Every change prints the new shape:
     flat@arch  main*: [flat-main* | (flat-qa / flat-rev)] · workers: [w1 | w2]   (* = what the user sees, | beside, / stacked)
-  PANE is a session name (flat-qa), a pane id (p-1a2b3c) or TAB.N (main.0). The workspace comes from
+  PANE is a session name (flat-qa), a pane id (p-1a2b3c) or TAB.N (main.0); a pane id or NAME@HOST finds its own
+  workspace and machine from anywhere. Otherwise the workspace comes from
   --ws WS[@HOST], else $SM_WORKSPACE (set inside sm panes), else the workspace whose folder holds cwd.
   Closing a pane or tab leaves its session running in the background; sm stop ends a session.
 
@@ -288,6 +291,17 @@ def to_app(args, quiet=False):
     """Run the Mac app's `sm ARGS` (the user's sidebar, the notch, showing a pane): on the Mac directly, elsewhere
     through `sm run mac`. quiet: return its answer instead of printing, and never fail the caller over it."""
     app_host = os.environ.get('SM_APP_HOST', 'mac')
+    if is_app_host() and args[:1] != ['feedback']:
+        # Without the app (install.sh --no-apps, or it did not build) `sm` on the Mac is this script, and running it
+        # here called itself without end: 96 processes in 4 seconds for one `sm show`.
+        home = os.path.expanduser('~')
+        app = shutil.which('sm', path=os.pathsep.join([home + '/bin', home + '/.local/bin', os.environ.get('PATH', '')]))
+        if not app or os.path.realpath(app) == os.path.realpath(__file__):
+            why = ('the sm app is not installed on this Mac, so `sm ' + args[0] + '` has nothing to show it in. '
+                   'Install SpaceManager.app with seol (install.sh without --no-apps), or use sm spawn/attach/tail here.')
+            if quiet:
+                return 'not in the sidebar: ' + why
+            sys.exit(why)
     line = ('"$HOME/.smux/bin/sm-session" ' if args[:1] == ['feedback'] else 'PATH="$HOME/bin:$HOME/.local/bin:$PATH" sm ') + shlex.join(args)
     cmd = ['/bin/sh', '-c', line] if is_app_host() else [sys.executable, os.path.abspath(__file__), 'run', app_host, '--', '/bin/sh', '-c', line]
     if not quiet:
@@ -314,6 +328,38 @@ def require_session_here(name, workspace):
         raise ValueError('no session ' + name + ' on ' + peer_core.host() + ', where workspace ' + workspace
                          + ' runs (sm ls). For another machine name it NAME@HOST. Start one here instead: '
                          'sm split --spawn NAME --kind claude|codex --ws ' + workspace)
+
+
+PANE_VERBS = ('split', 'resize', 'focus', 'zoom', 'swap', 'close', 'move')
+
+
+def pane_home(ref):
+    """The workspace and machine of a pane named so that it can only mean one: a pane id (p-1a2b3c, unique everywhere)
+    or a session NAME@HOST. None for a plain name or TAB.N, which stay relative to the picked workspace. Without this,
+    `sm split p-… --attach X@arch` from a Mac pane looked only in that pane's workspace and failed, and on Arch it
+    needed --ws as well (11/15)."""
+    if re.fullmatch(r'p-[0-9a-f]{6,}', ref):
+        for ws in lay.ws_list():
+            if ref in ws['panes'] or any(ref in lay.leaves(t['root']) for t in ws['tabs']):
+                return ws['workspace'], peer_core.host(), ref
+        from peer_transport import hosts
+        for other in hosts():
+            try:
+                found = json.loads(sm.remote(other, ['pane-home', ref, '--json']))
+            except Exception:
+                continue
+            if found.get('workspace'):
+                return found['workspace'], other, ref
+        return None
+    if '@' in ref:
+        name, owner = split(ref)
+        try:
+            info = where(name) if owner == peer_core.host() else json.loads(sm.remote(owner, ['where', name, '--json']))
+        except Exception:
+            return None
+        if info.get('workspace') and info.get('pane'):
+            return info['workspace'], owner, info['pane']
+    return None
 
 
 def layout_command(verb, rest, as_json):
@@ -370,6 +416,10 @@ def layout_command(verb, rest, as_json):
         print(json.dumps(value, ensure_ascii=False, indent=None if as_json else 1)); return
     if verb == 'layout' and rest and not rest[0].startswith('-'):
         ws_flag = rest[0]; rest = rest[1:]
+    if verb in PANE_VERBS and not ws_flag and rest and not rest[0].startswith('-'):
+        home = pane_home(rest[0])
+        if home:
+            ws_flag = home[0] + '@' + home[1]; rest = [home[2]] + rest[1:]
     name, host = pick_workspace(ws_flag)
     if host != peer_core.host():
         forward = [verb] + rest + ['--ws', name] + (['--json'] if as_json else [])
@@ -736,6 +786,10 @@ def main(argv):
         if len(rest) != 1:
             sys.exit('usage: sm show NAME[@HOST]   (a session, or a workspace name)')
         to_app(['show', rest[0] if '@' in rest[0] else rest[0] + '@' + peer_core.host()])
+    elif verb == 'pane-home':  # internal: which workspace here holds this pane id (pane_home on another machine)
+        found = next((w['workspace'] for w in lay.ws_list() if rest and (rest[0] in w['panes']
+                      or any(rest[0] in lay.leaves(t['root']) for t in w['tabs']))), None)
+        print(json.dumps(dict(workspace=found)))
     elif verb in LAYOUT_VERBS:
         layout_command(verb, rest, as_json)
     else:

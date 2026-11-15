@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 
-BIN = Path(__file__).resolve().parents[2] / 'bin'
+# The installed layout (session layer, peer and peer-hold in one folder): tests/run.sh assembles it in SEOL_BIN.
+BIN = Path(os.environ.get('SEOL_BIN') or Path(__file__).resolve().parents[1] / 'bin')
 sys.path.insert(0, str(BIN))
 import sm_usage  # noqa: E402
 

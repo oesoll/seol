@@ -6,7 +6,7 @@ session id. Nothing is stopped.
 
 migrate: for one adopted agent that is idle, replace the tmux pane's process with
 `sm-session attach NAME`. The agent process ends, sm resumes the same engine session
-(ccv/ccx -ry) under its own peer-hold, and the tmux pane keeps showing it as a plain viewer.
+(resuming its conversation) under its own peer-hold, and the tmux pane keeps showing it as a plain viewer.
 The layout people see does not change; the agent no longer depends on tmux. When the sm app
 draws the workspace itself, the tmux viewer can simply be closed.
 """
