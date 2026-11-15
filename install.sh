@@ -85,8 +85,11 @@ python3 "$here/hooks/install-attention-hooks.py" --host "$attention"
 for skills in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
     [ -d "$(dirname "$skills")" ] || continue
     mkdir -p "$skills"
-    rm -rf "$skills/peer" "$skills/seol"
-    cp -R "$here/peer/skills/peer" "$here/skills/seol" "$skills/"
+    for skill in "$here/peer/skills/peer" "$here"/skills/*/; do
+        skill=${skill%/}
+        rm -rf "$skills/$(basename "$skill")"
+        cp -R "$skill" "$skills/"
+    done
 done
 
 if [ $mac = 1 ] && [ $apps = 1 ]; then

@@ -44,6 +44,10 @@ On a Mac, open SpaceManager and Fine once so macOS asks for their permissions; `
 
 Done means: `peer doctor` shows no `✗`, the person saw a message arrive, and they know `sm` and `peer` exist (`sm --help`, `peer -h`).
 
+## Orchestration (only if they ask)
+
+The `team-lead` skill lets one agent lead a team: your harness's subagents and seol sessions on any harness, chosen by what each model is good at and which subscription has room. It stays out of the way until someone asks for it. If the person wants it now, ask which subscriptions they have on which machine and how they want them spent, and write that in their language to `~/.config/seol/team.md`; the skill explains the rest when a lead first reads it.
+
 ## Updating
 
 ```sh
