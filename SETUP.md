@@ -7,7 +7,8 @@ seol has three parts, each its own repository linked here as a submodule: **peer
 ## 1. Check what the machine has
 
 - macOS 14+ on Apple Silicon for the apps, or Linux for the session layer and peer alone.
-- `git`, `python3` 3.9+, and Rust (`cargo`) to build `peer-hold`. On a Mac also Xcode command line tools (Swift).
+- `git`, `python3` 3.9+, and Rust (`cargo`) to build `peer-hold`.
+- On a Mac, the apps need **Xcode** (the App Store app, selected with `sudo xcode-select -s /Applications/Xcode.app`). The Command Line Tools alone cannot build them: the SwiftUI macros they use ship only with Xcode. Without Xcode, install with `--no-apps`; the session layer and peer work the same and `sm` is the session CLI.
 - Claude Code and/or Codex installed and logged in. seol starts them as they are.
 
 Install anything missing that the person's package manager can install without questions (for example `brew install rust`). Ask before anything that needs their password.

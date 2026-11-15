@@ -34,7 +34,7 @@ git clone --recursive https://github.com/oesoll/seol ~/.local/share/seol
 sh ~/.local/share/seol/install.sh --accept-inbound --codex-alias
 ```
 
-macOS 14+ on Apple Silicon for the apps; the session layer and peer also run on Linux. Needs git, Python 3.9+ and Rust.
+macOS 14+ on Apple Silicon with Xcode for the apps (`--no-apps` without it); the session layer and peer also run on Linux. Needs git, Python 3.9+ and Rust.
 
 ## Use
 

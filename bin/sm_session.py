@@ -293,8 +293,8 @@ def release_peer_name(name):
 
 def unattended(kind, args, ask=False):
     """An agent started by sm runs with nobody at its screen, so a permission or approval prompt would stop it for
-    good. ccv/ccx -y skips them (Claude
-    --dangerously-skip-permissions, Codex without the sandbox), the same mode a resume (-ry) already uses.
+    good. -y skips them (a wrapper's shorthand; peer-session spells it --dangerously-skip-permissions for the stock
+    Claude and --dangerously-bypass-approvals-and-sandbox for Codex), the same mode a resume (-ry) already uses.
     --ask keeps the prompts."""
     args = list(args)
     if kind == 'omo':

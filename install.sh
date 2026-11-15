@@ -59,14 +59,32 @@ done
 if [ $mac = 1 ] && [ $apps = 1 ]; then
     step "apps (first build downloads the terminal engine, about 35 MB)"
     to="${SEOL_APPS:-/Applications}"
-    app=$(zsh "$here/sm/scripts/package-app.sh" release | tail -1)
-    ditto "$app" "$to/SpaceManager.app"
-    install -m 0755 "$here/sm/.build/release/sm" "$HOME/.local/bin/sm"
-    app=$(zsh "$here/fine/scripts/package-app.sh" release | tail -1)
-    ditto "$app" "$to/Fine.app"
-    install -m 0755 "$here/fine/.build/release/fine-cli" "$HOME/.local/bin/fine"
-    echo "SpaceManager.app and Fine.app in $to; sm and fine in ~/.local/bin"
+    developer=$(xcode-select -p 2>/dev/null || true)
+    built=0
+    case "$developer" in
+        ""|*CommandLineTools*)
+            # The SwiftUI macros the apps use (@State) ship with Xcode, not with the Command Line Tools (oesoll/seol#1).
+            echo "✗ the apps need Xcode, not only the Command Line Tools ($developer)"
+            echo "  → install Xcode from the App Store, then: sudo xcode-select -s /Applications/Xcode.app && sh $here/install.sh"
+            echo "  (the session layer and peer are installed; --no-apps skips this step)" ;;
+        *)
+            if zsh "$here/sm/scripts/package-app.sh" release > "$smux/build-sm.log" 2>&1 \
+                && zsh "$here/fine/scripts/package-app.sh" release > "$smux/build-fine.log" 2>&1; then
+                ditto "$here/sm/.build/SpaceManager.app" "$to/SpaceManager.app"
+                install -m 0755 "$here/sm/.build/release/sm" "$HOME/.local/bin/sm"
+                ditto "$here/fine/.build/Fine.app" "$to/Fine.app"
+                install -m 0755 "$here/fine/.build/release/fine-cli" "$HOME/.local/bin/fine"
+                echo "SpaceManager.app and Fine.app in $to; sm and fine in ~/.local/bin"
+                built=1
+            else
+                echo "✗ an app did not build; the first errors:"
+                grep -h -m 5 'error:' "$smux/build-sm.log" "$smux/build-fine.log" 2>/dev/null || tail -5 "$smux/build-sm.log"
+                echo "  full logs: $smux/build-sm.log, $smux/build-fine.log"
+            fi ;;
+    esac
 fi
+# Without the app (--no-apps, or it did not build), `sm` is the session CLI itself, as on Linux.
+[ $mac = 1 ] && [ ! -x "$HOME/.local/bin/sm" ] && ln -sfn "$smux/bin/sm-session" "$HOME/.local/bin/sm"
 
 step "restore after reboot, sleep idle agents"
 if [ $services = 0 ]; then
