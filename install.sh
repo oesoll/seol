@@ -73,7 +73,15 @@ fi
 step "hooks for Claude Code and Codex"
 # shellcheck disable=SC2086
 "$smux/bin/peer" install $peer_flags
-python3 "$here/hooks/install-attention-hooks.py" --host local
+# Attention notices (permission asked, turn failed) go to the Mac that runs the apps. On another machine that is the
+# app host peer reaches (SM_APP_HOST, "mac" by default); "local" there showed them nowhere.
+attention=local
+if [ $mac = 0 ]; then
+    app=${SM_APP_HOST:-mac}
+    python3 -c 'import json, sys; sys.exit(sys.argv[2] not in json.load(open(sys.argv[1])))' "$config/hosts.json" "$app" 2>/dev/null \
+        && attention=$app
+fi
+python3 "$here/hooks/install-attention-hooks.py" --host "$attention"
 for skills in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
     [ -d "$(dirname "$skills")" ] || continue
     mkdir -p "$skills"
