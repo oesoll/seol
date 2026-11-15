@@ -309,6 +309,13 @@ def unattended(kind, args, ask=False):
     return ['-y'] + args
 
 
+# The lead (a session the user starts) keeps Claude's advisor from settings (advisorModel); an agent spawned by
+# another agent runs without it: the lead is where judgment is made, and its workers are checked by the lead and by a
+# reviewer from the other engine instead. Before the caller's --env, so `--env CLAUDE_CODE_DISABLE_ADVISOR_TOOL=`
+# gives one worker the advisor back.
+ADVISOR_OFF = 'CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1'
+
+
 def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=None, fresh=False, timeout=30, ask=False):
     peer_core.valid_name(name)
     args = unattended(kind, args, ask)
@@ -341,6 +348,8 @@ def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=Non
         full_env = ['PEER_NAME=' + name, 'PEER_STATE=' + str(peer_core.root()), 'PEER_CONFIG=' + str(peer_core.config())]
         if parent:
             full_env.append('PEER_PARENT=' + parent)
+            if kind == 'claude':
+                full_env.append(ADVISOR_OFF)
         if pane:
             full_env.append('SM_PANE_ID=' + pane)
         if pane or visible:

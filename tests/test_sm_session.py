@@ -104,6 +104,15 @@ class SmSessionTests(unittest.TestCase):
         self.spawn('asked', ask=True)
         self.assertNotIn('agent claude -y', self.tail('asked'))
 
+    def test_only_the_lead_keeps_the_advisor(self):
+        # A session the user starts keeps Claude's advisor; one an agent spawns runs without it, unless asked back.
+        self.assertNotIn(sm.ADVISOR_OFF, sm.load(self.spawn('lead')['name'])['env'])
+        self.assertIn(sm.ADVISOR_OFF, sm.load(self.spawn('worker', parent='test/abc')['name'])['env'])
+        back = sm.load(self.spawn('helped', parent='test/abc', env=['CLAUDE_CODE_DISABLE_ADVISOR_TOOL='])['name'])['env']
+        self.assertGreater(back.index('CLAUDE_CODE_DISABLE_ADVISOR_TOOL='), back.index(sm.ADVISOR_OFF))
+        e = sm.load(sm.spawn('cx', 'codex', str(self.work), timeout=.3, parent='test/abc')['name'])
+        self.assertNotIn(sm.ADVISOR_OFF, e['env'])
+
     def test_concurrent_spawns_start_once(self):
         results = []
         threads = [threading.Thread(target=lambda: results.append(self.spawn()['action'])) for _ in range(4)]
