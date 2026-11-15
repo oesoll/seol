@@ -10,7 +10,8 @@ tag=${1:?usage: scripts/release.sh vX.Y.Z}
 [[ $(uname -m) == arm64 ]] || { echo "build on Apple Silicon" >&2; exit 1; }
 cd $here
 git submodule update --init --quiet
-[[ -z $(git status --porcelain -- bin hold sm fine peer | grep -v '^ ?') ]] || { echo "commit first: the release must match the pins" >&2; exit 1; }
+git diff --quiet --ignore-submodules=untracked HEAD -- bin hold sm fine peer \
+    || { echo "commit first: the release must match the pins" >&2; exit 1; }
 
 out=$here/.build/release; rm -rf $out; mkdir -p $out/seol/bin
 (cd hold && cargo build --release --quiet)
