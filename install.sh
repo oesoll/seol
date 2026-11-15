@@ -1,6 +1,8 @@
 #!/bin/sh
 # Install seol: the session layer, peer, and on a Mac the sm and Fine apps. Safe to run again (it updates).
-#   sh install.sh [--no-apps] [--no-services] [peer install flags, e.g. --accept-inbound --codex-alias]
+#   sh install.sh [--no-apps] [--no-services] [--from-source] [peer install flags, e.g. --accept-inbound --codex-alias]
+# On an Apple Silicon Mac the apps and peer-hold come prebuilt from the release named in RELEASE (no Xcode, no Rust);
+# --from-source builds them here instead, as it does on Linux.
 # Everything lands where the apps look for it: ~/.smux/bin (session layer + peer), ~/.local/bin (CLIs),
 # /Applications (apps; SEOL_APPS overrides), ~/Library/LaunchAgents or ~/.config/systemd/user (restore, sleep).
 set -eu
@@ -15,9 +17,9 @@ if [ ! -f "$here/bin/sm-session" ]; then
     exec sh "$dest/install.sh" "$@"
 fi
 
-apps=1; services=1
-for a in "$@"; do case "$a" in --no-apps) apps=0 ;; --no-services) services=0 ;; esac; done
-peer_flags=$(printf '%s\n' "$@" | grep -v '^--no-' | tr '\n' ' ' || true)
+apps=1; services=1; from_source=0
+for a in "$@"; do case "$a" in --no-apps) apps=0 ;; --no-services) services=0 ;; --from-source) from_source=1 ;; esac; done
+peer_flags=$(printf '%s\n' "$@" | grep -vE '^--(no-|from-source)' | tr '\n' ' ' || true)
 mac=0; [ "$(uname -s)" = Darwin ] && mac=1
 smux="$HOME/.smux"
 step() { printf '\n== %s\n' "$1"; }
@@ -37,9 +39,32 @@ config="${PEER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/peer}"; mkdir -p "$conf
 ln -sfn "$smux/bin/peer" "$HOME/.local/bin/peer"
 [ $mac = 1 ] || ln -sfn "$smux/bin/sm-session" "$HOME/.local/bin/sm"   # on Linux `sm` is the session CLI itself
 
+# Prebuilt Mac pieces, used only while sm, fine and hold are exactly what the release was built from.
+prebuilt=""
+if [ $mac = 1 ] && [ "$(uname -m)" = arm64 ] && [ $from_source = 0 ] && [ -f "$here/RELEASE" ]; then
+    step "prebuilt apps and peer-hold"
+    tag=$(sed -n 1p "$here/RELEASE")
+    want() { sed -n "s/^$1 //p" "$here/RELEASE"; }
+    if [ "$(want sm)" = "$(git -C "$here/sm" rev-parse HEAD)" ] && [ "$(want fine)" = "$(git -C "$here/fine" rev-parse HEAD)" ] \
+        && [ "$(want hold)" = "$(git -C "$here" rev-parse HEAD:hold)" ]; then
+        dl="$smux/release/$tag"
+        if [ ! -x "$dl/seol/bin/peer-hold" ]; then
+            rm -rf "$dl"; mkdir -p "$dl"
+            if curl -fsSL -o "$dl/seol.zip" "https://github.com/oesoll/seol/releases/download/$tag/seol-macos-arm64.zip" \
+                && ditto -x -k "$dl/seol.zip" "$dl"; then rm -f "$dl/seol.zip"
+            else echo "· could not download release $tag; building from source"; rm -rf "$dl"; fi
+        fi
+        [ -x "$dl/seol/bin/peer-hold" ] && prebuilt="$dl/seol" && echo "release $tag"
+    else
+        echo "· this checkout is newer than release $tag: building from source"
+    fi
+fi
+
 step "peer-hold (keeps each agent's terminal alive)"
 cargo=$(command -v cargo || true); [ -n "$cargo" ] || { [ -x "$HOME/.cargo/bin/cargo" ] && cargo="$HOME/.cargo/bin/cargo"; }
-if [ -n "$cargo" ]; then
+if [ -n "$prebuilt" ]; then
+    install -m 0755 "$prebuilt/bin/peer-hold" "$smux/bin/peer-hold" && echo "installed $smux/bin/peer-hold (prebuilt)"
+elif [ -n "$cargo" ]; then
     PATH="$(dirname "$cargo"):$PATH" sh "$here/hold/install.sh" "$smux/bin"
 else
     echo "✗ needs Rust: install it (macOS: brew install rust; Linux: https://rustup.rs) and run this again"
@@ -57,11 +82,19 @@ for skills in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
 done
 
 if [ $mac = 1 ] && [ $apps = 1 ]; then
-    step "apps (first build downloads the terminal engine, about 35 MB)"
+    step "apps"
     to="${SEOL_APPS:-/Applications}"
     developer=$(xcode-select -p 2>/dev/null || true)
     built=0
+    [ -n "$prebuilt" ] && developer=prebuilt
     case "$developer" in
+        prebuilt)
+            ditto "$prebuilt/SpaceManager.app" "$to/SpaceManager.app"
+            ditto "$prebuilt/Fine.app" "$to/Fine.app"
+            install -m 0755 "$prebuilt/bin/sm" "$HOME/.local/bin/sm"
+            install -m 0755 "$prebuilt/bin/fine" "$HOME/.local/bin/fine"
+            echo "SpaceManager.app and Fine.app in $to; sm and fine in ~/.local/bin"
+            built=1 ;;
         ""|*CommandLineTools*)
             # The SwiftUI macros the apps use (@State) ship with Xcode, not with the Command Line Tools (oesoll/seol#1).
             echo "✗ the apps need Xcode, not only the Command Line Tools ($developer)"

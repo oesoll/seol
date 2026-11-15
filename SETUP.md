@@ -7,8 +7,9 @@ seol has three parts, each its own repository linked here as a submodule: **peer
 ## 1. Check what the machine has
 
 - macOS 14+ on Apple Silicon for the apps, or Linux for the session layer and peer alone.
-- `git`, `python3` 3.9+, and Rust (`cargo`) to build `peer-hold`.
-- On a Mac, the apps need **Xcode** (the App Store app, selected with `sudo xcode-select -s /Applications/Xcode.app`). The Command Line Tools alone cannot build them: the SwiftUI macros they use ship only with Xcode. Without Xcode, install with `--no-apps`; the session layer and peer work the same and `sm` is the session CLI.
+- `git` and `python3` 3.9+ (on a Mac both come with the Command Line Tools: `xcode-select --install`).
+- On an Apple Silicon Mac that is all: the apps and `peer-hold` come prebuilt from the release.
+- On Linux, or with `--from-source`, Rust (`cargo`) builds `peer-hold`, and on a Mac building the apps needs **Xcode** itself (the Command Line Tools lack the SwiftUI macros the apps use).
 - Claude Code and/or Codex installed and logged in. seol starts them as they are.
 
 Install anything missing that the person's package manager can install without questions (for example `brew install rust`). Ask before anything that needs their password.
@@ -27,7 +28,7 @@ git clone --recursive https://github.com/oesoll/seol ~/.local/share/seol
 sh ~/.local/share/seol/install.sh --accept-inbound --codex-alias   # only the flags they agreed to
 ```
 
-On a Mac this builds the two apps (a few minutes, the first build downloads the terminal engine). `--no-apps` skips them. Read every `✗` line in the output and fix it yourself; `·` lines are optional.
+On a Mac this installs the two apps from the release. `--no-apps` skips them. Read every `✗` line in the output and fix it yourself; `·` lines are optional.
 
 If Codex is installed, tell them to open `/hooks` once in a Codex session and trust the new hooks. Only the person can do that.
 
