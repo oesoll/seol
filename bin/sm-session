@@ -20,11 +20,11 @@ import os  # noqa: E402
 HELP = '''sm — sessions: where agents live and whether they are alive (tmux's job, without tmux)
 
   sm spawn NAME --kind claude|codex|omo|shell [--cwd DIR] [--host HOST] [--pane UUID | --visible]
-           [--env K=V]... [--fresh] [--lead] [-- engine args]
+           [--env K=V]... [--fresh] [--worker] [-- engine args]
         Start NAME through claude/codex (or the wrappers launch.json names) under its own peer-hold. The name is
         the session: running → returns it (no second copy); ended or died → resumes its conversation.
-        --fresh starts a new engine session under an ended name. --pane binds an sm panel. A Claude an agent
-        spawns runs without Claude's advisor (it is a worker); --lead keeps it for a successor or a sub-lead.
+        --fresh starts a new engine session under an ended name. --pane binds an sm panel. --worker: a team
+        lead's Claude worker, started without Claude's advisor (judgment stays with the lead).
   sm attach NAME[@HOST] [--passive] [--no-screen]   Show NAME here; not running → resumed first (--no-screen:
                             the app draws the last screen and dims it; attach paints nothing itself). Size follows
                             the viewer that last typed; --passive never sets it (side views)
@@ -591,8 +591,7 @@ def main(argv):
         p.add_argument('--visible', action='store_true'); p.add_argument('--env', action='append', default=[])
         p.add_argument('--fresh', action='store_true'); p.add_argument('--parent'); p.add_argument('--timeout', type=float, default=30)
         p.add_argument('--ask', action='store_true', help='keep permission/approval prompts (default: claude/codex skip them, -y)')
-        p.add_argument('--lead', action='store_true', help='a team lead (successor, sub-lead): keeps Claude\'s advisor, '
-                       'which a session spawned by an agent otherwise runs without')
+        p.add_argument('--worker', action='store_true', help="a team lead's Claude worker: no Claude advisor")
         a = p.parse_args(prefix)
         name, host = split(a.name, a.host)
         parent = a.parent
@@ -603,11 +602,11 @@ def main(argv):
             forward = ['spawn', name, '--kind', a.kind, '--cwd', a.cwd, '--timeout', str(min(a.timeout, 40)), '--json']
             forward += (['--pane', a.pane] if a.pane else []) + (['--visible'] if a.visible else [])
             forward += [x for e in a.env for x in ('--env', e)] + (['--fresh'] if a.fresh else [])
-            forward += (['--parent', parent] if parent else []) + (['--ask'] if a.ask else []) + (['--lead'] if a.lead else [])
+            forward += (['--parent', parent] if parent else []) + (['--ask'] if a.ask else []) + (['--worker'] if a.worker else [])
             forward += ['--'] + extra if extra else []
             value = json.loads(sm.remote(host, forward))
         else:
-            value = sm.spawn(name, a.kind, a.cwd, a.pane, a.visible, a.env, extra, parent, a.fresh, a.timeout, a.ask, a.lead)
+            value = sm.spawn(name, a.kind, a.cwd, a.pane, a.visible, a.env, extra, parent, a.fresh, a.timeout, a.ask, a.worker)
         emit(value, as_json)
     elif verb == 'feedback':
         # sm feedback "what got in the way" — one line to sm's owner, with the commands you ran just before.

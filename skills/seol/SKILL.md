@@ -21,7 +21,7 @@ sm run HOST -- CMD                   sm cp [HOST:]SRC [HOST:]DST
 - Start agents with `sm spawn`, not a bare `claude` or `codex` in some terminal: only an sm session survives restarts, sleeps and wakes, and is reachable by name.
 - The name is the session. Spawning a running name returns it; spawning an ended name resumes its conversation. `--fresh` throws the conversation away, so use `sm resume NAME -- -m MODEL` to change an option instead.
 - Spawned agents start without permission prompts: nobody sits at their screen, so a prompt would stop them for good. `--ask` keeps the prompts.
-- A Claude you spawn is your worker and runs without Claude's advisor: judgment stays with the lead. Spawning another lead (your successor, a sub-lead with its own workers) → add `--lead` so it keeps the advisor.
+- Leading a team the user asked you to orchestrate: `--worker` starts a Claude worker without Claude's advisor, so judgment stays with you. Without it a spawned agent runs as the user's settings say.
 - Idle past the prompt cache (65 min), a session sleeps to free memory. A message, opening its pane or `sm wake NAME` brings it back in place. `sm awake NAME` exempts one.
 - When claude or codex is updated, sm restarts idle sessions into the new version with the same conversation.
 - A choice shown on an agent's screen that belongs to the person stays theirs. Never type Enter into a screen you have not read.

@@ -309,15 +309,14 @@ def unattended(kind, args, ask=False):
     return ['-y'] + args
 
 
-# A lead (a session the user starts, or one spawned with --lead: a successor or a sub-lead) keeps Claude's advisor
-# from settings (advisorModel); a worker another agent spawns runs without it: the lead is where judgment is made,
-# and its workers are checked by the lead and by a reviewer from the other engine instead. Only new sessions: one
-# spawned before this resumes as it was, since some of those are leads an agent started.
+# --worker: a lead orchestrating a team spawns its Claude workers without Claude's advisor (advisorModel in settings);
+# judgment stays with the lead, and a worker's result is checked by the lead and by a reviewer from the other engine.
+# Opt-in: without it a spawned agent runs with whatever the user's settings say, orchestration or not.
 ADVISOR_OFF = 'CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1'
 
 
 def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=None, fresh=False, timeout=30, ask=False,
-          lead=False):
+          worker=False):
     peer_core.valid_name(name)
     args = unattended(kind, args, ask)
     if kind not in ('claude', 'codex', 'omo', 'shell'):
@@ -349,8 +348,8 @@ def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=Non
         full_env = ['PEER_NAME=' + name, 'PEER_STATE=' + str(peer_core.root()), 'PEER_CONFIG=' + str(peer_core.config())]
         if parent:
             full_env.append('PEER_PARENT=' + parent)
-            if kind == 'claude' and not lead:
-                full_env.append(ADVISOR_OFF)
+        if worker and kind == 'claude':
+            full_env.append(ADVISOR_OFF)
         if pane:
             full_env.append('SM_PANE_ID=' + pane)
         if pane or visible:

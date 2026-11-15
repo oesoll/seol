@@ -104,12 +104,11 @@ class SmSessionTests(unittest.TestCase):
         self.spawn('asked', ask=True)
         self.assertNotIn('agent claude -y', self.tail('asked'))
 
-    def test_only_the_lead_keeps_the_advisor(self):
-        # A session the user starts keeps Claude's advisor, and so does a lead an agent spawns; a worker runs without.
-        self.assertNotIn(sm.ADVISOR_OFF, sm.load(self.spawn('lead')['name'])['env'])
-        self.assertIn(sm.ADVISOR_OFF, sm.load(self.spawn('worker', parent='test/abc')['name'])['env'])
-        self.assertNotIn(sm.ADVISOR_OFF, sm.load(self.spawn('successor', parent='test/abc', lead=True)['name'])['env'])
-        e = sm.load(sm.spawn('cx', 'codex', str(self.work), timeout=.3, parent='test/abc')['name'])
+    def test_only_a_worker_asked_for_runs_without_the_advisor(self):
+        # Orchestration is opt-in: a spawned agent keeps the user's settings unless its lead says --worker.
+        self.assertNotIn(sm.ADVISOR_OFF, sm.load(self.spawn('plain', parent='test/abc')['name'])['env'])
+        self.assertIn(sm.ADVISOR_OFF, sm.load(self.spawn('worker', parent='test/abc', worker=True)['name'])['env'])
+        e = sm.load(sm.spawn('cx', 'codex', str(self.work), timeout=.3, parent='test/abc', worker=True)['name'])
         self.assertNotIn(sm.ADVISOR_OFF, e['env'])
 
     def test_concurrent_spawns_start_once(self):
