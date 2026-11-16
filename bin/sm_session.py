@@ -361,6 +361,10 @@ def spawn(name, kind, cwd, pane=None, visible=False, env=(), args=(), parent=Non
         full_env += list(env)
         entry = dict(name=name, kind=kind, host=peer_core.host(), cwd=cwd, hold=hold, session=None, args=list(args),
                      env=full_env, pane=pane, visible=bool(pane or visible), parent=parent, created=time.time())
+        if not pane and os.environ.get('SM_WORKSPACE'):
+            # Spawned from an agent in an sm pane: it belongs to the spawner's workspace (sm show puts it there), even
+            # when another workspace's folder also holds its cwd (11/16: a successor from lopin landed in harness).
+            entry['from_ws'] = os.environ['SM_WORKSPACE']
         write(entry_path(name), entry)
         start_holder(entry, launcher(kind, args))
         return result(entry, 'spawned', None if kind == 'shell' else wait_registered(entry, timeout))
@@ -498,7 +502,8 @@ def workspace_of(entry):
     """The workspace a session belongs to: named at spawn (SM_WORKSPACE), shown in its layout, or holding its
     folder (deepest). None for a background helper outside every workspace."""
     import sm_layout
-    named = next((e.split('=', 1)[1] for e in entry.get('env', []) if e.startswith('SM_WORKSPACE=')), None)
+    named = next((e.split('=', 1)[1] for e in entry.get('env', []) if e.startswith('SM_WORKSPACE=')), None) \
+        or entry.get('from_ws')
     spaces = sm_layout.ws_list()
     if named and any(w['workspace'] == named for w in spaces):
         return named
@@ -508,7 +513,11 @@ def workspace_of(entry):
             return ws['workspace']
     if any(e.startswith('FINE_TAB_ID=') for e in entry.get('env', [])):
         return None  # a Fine tab is its own place; sharing a folder with a workspace doesn't make it part of it
-    cwd = entry.get('cwd', '')
+    return folder_workspace(entry.get('cwd', ''), spaces)
+
+
+def folder_workspace(cwd, spaces):
+    """The workspace whose folder holds cwd, the innermost one when folders nest (~/cld/lopin is in ~/cld too)."""
     best = None
     for ws in spaces:
         root = ws.get('cwd', '')

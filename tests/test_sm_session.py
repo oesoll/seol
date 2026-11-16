@@ -601,5 +601,15 @@ class TrustFolderTests(unittest.TestCase):
             shutil.rmtree(temp, ignore_errors=True)
 
 
+class FolderWorkspaceTest(unittest.TestCase):
+    def test_innermost_folder_wins_when_workspaces_nest(self):
+        spaces = [dict(workspace='harness', cwd='/u/cld'), dict(workspace='lopin', cwd='/u/cld/lopin')]
+        self.assertEqual(sm.folder_workspace('/u/cld/lopin', spaces), 'lopin')
+        self.assertEqual(sm.folder_workspace('/u/cld/lopin/web', spaces), 'lopin')
+        self.assertEqual(sm.folder_workspace('/u/cld/other', spaces), 'harness')
+        self.assertIsNone(sm.folder_workspace('/u/elsewhere', spaces))
+        self.assertEqual(sm.folder_workspace('/u/cld/lopin', list(reversed(spaces))), 'lopin')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)

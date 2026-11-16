@@ -159,9 +159,12 @@ def where(name):
                     return dict(name=shown, host=peer_core.host(), workspace=ws['workspace'], tab=tab['id'], tab_name=tab['name'],
                                 pane=pane, status=sm.status(entry) if entry else None, fine_tab=fine_tab, **screen_facts(entry))
     if entry:
-        cwd = entry['cwd']
-        ws = next((w for w in lay.ws_list() if cwd == w['cwd'] or cwd.startswith(w['cwd'].rstrip('/') + '/')), None)
-        return dict(name=entry['name'], host=peer_core.host(), workspace=ws and ws['workspace'], tab=None, tab_name=None,
+        # Not in a pane: the spawner's workspace if an agent in a pane started it, else the innermost workspace whose
+        # folder holds its cwd. The first match was taken before, so ~/cld/lopin went to harness (~/cld) (11/16).
+        spaces = lay.ws_list()
+        origin = entry.get('from_ws')
+        ws = origin if origin and any(w['workspace'] == origin for w in spaces) else sm.folder_workspace(entry['cwd'], spaces)
+        return dict(name=entry['name'], host=peer_core.host(), workspace=ws, tab=None, tab_name=None,
                     pane=None, status=sm.status(entry), fine_tab=fine_tab, **screen_facts(entry))  # fine_tab: shown in that Fine tab
     raise ValueError('no session named ' + name + ' on ' + peer_core.host())
 
