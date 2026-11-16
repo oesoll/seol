@@ -129,6 +129,27 @@ class SmSessionTests(unittest.TestCase):
         self.assertIn('agent claude -ry sid-1', self.tail())
         self.assertEqual(sm.load('lane')['hold'], entry['hold'])  # same socket: panels keep pointing at it
 
+    def test_a_reboot_brings_back_every_live_session_and_tells_the_busy_ones_to_carry_on(self):
+        rows = {}
+        for name, state in (('busy', 'working'), ('ended-busy', 'gone'), ('calm', 'idle')):
+            self.spawn(name)
+            entry = sm.load(name); entry['session'] = 'sid-' + name; sm.write(sm.entry_path(name), entry)
+            row = dict(id='claude:sid-' + name, session='sid-' + name, kind='claude', name=name, state=state,
+                       hold=entry['hold'], observed=time.time())
+            if state == 'gone':
+                row['before_end'] = 'working'   # Claude ran its SessionEnd hook as the machine went down
+            sm.peer_core.write(sm.peer_core.path('sessions', row['id']), row)
+            rows[name] = row
+            self.kill_holder(name)
+        sent = []
+        import peer_delivery
+        with patch.object(peer_delivery, 'receive', lambda request, source: sent.append(request) or {'stage': 'queued'}):
+            out = sm.restore()['restored']
+        self.assertEqual(sorted(r['name'] for r in out if r['action'] == 'resumed'), ['busy', 'calm', 'ended-busy'])
+        self.assertEqual(sorted(r['recipient'] for r in sent), ['claude:sid-busy', 'claude:sid-ended-busy'])
+        self.assertEqual(sent[0]['body'], sm.REBOOT_NOTE % sm.peer_core.host())
+        self.assertEqual(sent[0]['sender']['id'], 'service:sm')
+
     def test_stopped_stays_stopped_until_asked(self):
         self.spawn()
         entry = sm.load('lane'); entry['session'] = 'sid-2'; sm.write(sm.entry_path('lane'), entry)

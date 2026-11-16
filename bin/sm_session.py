@@ -122,6 +122,12 @@ def peer_row(entry):
     """This session's peer row. A resume reuses the holder socket, so an older conversation's row can share it: prefer
     the row of this conversation, then the most recently observed. Taking the first match read a days-old row, and the
     live harness-claude showed as gone and its pane stayed "waking" (11/08 sm feedback)."""
+    row = raw_peer_row(entry)
+    return peer_core.public(row) if row else None
+
+
+def raw_peer_row(entry):
+    """peer_row as stored: the state it last reported, even when its process has since died (a reboot)."""
     sid = entry.get('session')
     if sid and entry.get('kind') in ('claude', 'codex', 'omo'):
         # The row of this conversation sits at a known path: read that one file. Scanning every row (691 on the Mac,
@@ -131,12 +137,12 @@ def peer_row(entry):
         except ValueError:
             row = None
         if row:
-            return peer_core.public(row)
+            return row
     rows = [row for row in peer_core.sessions()
             if (sid and row.get('session') == sid) or row.get('hold') == entry['hold']]
     if not rows:
         return None
-    return peer_core.public(max(rows, key=lambda row: (bool(sid) and row.get('session') == sid, row.get('observed') or 0)))
+    return max(rows, key=lambda row: (bool(sid) and row.get('session') == sid, row.get('observed') or 0))
 
 
 def scope_prefix(sock):
@@ -858,16 +864,43 @@ def ls():
     return dict(sessions=rows, host=peer_core.host())
 
 
+REBOOT_NOTE = '[%s 재부팅, 하던 일을 이어가주세요.]'
+BUSY_STATES = ('working', 'waiting-on', 'blocked')
+
+
 def restore():
-    """At login/boot: resume every session whose holder died without exiting. Ended ones stay ended."""
+    """At login/boot, bring back every session whose holder died without exiting (a reboot, a crash): it was alive
+    when the machine went down. One that was working is also told to carry on — a resumed agent waits at its prompt,
+    so after a reboot SEOL had to type "마저 진행해봐" into it (11/16). Ended ones (stopped, or put to sleep by
+    `sm sleep`) stay ended."""
     done = []
     for entry in entries():
-        if entry.get('host') == peer_core.host() and status(entry) == 'dead':
-            try:
-                done.append(resume(entry['name'], timeout=5))
-            except (ValueError, OSError, subprocess.SubprocessError) as error:
-                done.append(dict(action='failed', name=entry['name'], error=str(error)))
+        if entry.get('host') != peer_core.host() or status(entry) != 'dead':
+            continue
+        name = entry['name']
+        try:
+            row = raw_peer_row(entry) if entry.get('kind') != 'shell' else None
+            result = resume(name, timeout=5)
+            last = row and (row.get('before_end') if row.get('state') == 'gone' else row.get('state'))
+            if last in BUSY_STATES:
+                result['told'] = tell_to_carry_on(entry, row)
+            done.append(result)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            done.append(dict(action='failed', name=name, error=str(error)))
     return dict(restored=done)
+
+
+def tell_to_carry_on(entry, row):
+    """One line to a session that was working when the machine went down, the way peer tells a sender that a turn
+    failed. Queued if the agent has not registered again yet; peer delivers it once it has."""
+    from peer_delivery import receive
+    request = dict(op='receive', id=secrets.token_hex(12), recipient=row['id'],
+                   body=REBOOT_NOTE % peer_core.host(),
+                   sender=dict(id='service:sm', name='sm', host=peer_core.host(), mode='default'))
+    try:
+        return receive(request, peer_core.host()).get('stage')
+    except (ValueError, OSError) as error:
+        return 'not sent: ' + str(error)
 
 
 KEYS = {'Enter': b'\r', 'Tab': b'\t', 'Esc': b'\x1b', 'Space': b' ', 'BSpace': b'\x7f', 'Up': b'\x1b[A', 'Down': b'\x1b[B',
