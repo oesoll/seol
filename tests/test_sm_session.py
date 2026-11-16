@@ -546,6 +546,29 @@ class SmSessionTests(unittest.TestCase):
         self.assertEqual(sleeps[2:4], [.3, .3])         # ready, just changed
         self.assertEqual(sleeps[4], 2.0)                # ready and steady
 
+    def test_a_known_conversation_reads_its_own_peer_row_without_scanning(self):
+        self.spawn()
+        entry = sm.load('lane'); entry['session'] = 'sid-direct'; sm.write(sm.entry_path('lane'), entry)
+        sm.peer_core.write(sm.peer_core.path('sessions', 'claude:sid-direct'),
+                           dict(id='claude:sid-direct', session='sid-direct', kind='claude', name='lane', state='idle',
+                                observed=time.time() + 1, hold=entry['hold']))
+        with patch.object(sm.peer_core, 'sessions', side_effect=AssertionError('scanned every row')):
+            self.assertEqual(sm.view_state('lane'), 'ready')
+
+    def test_one_state_watcher_for_many_names(self):
+        # The app writes +NAME / -NAME; each name added is answered at once; closing the pipe ends the watcher.
+        read, write = os.pipe()
+        os.write(write, b'+a\n+b\n')
+        looks = {'a': iter(['ready', 'ready', 'ready']), 'b': iter(['waking', 'ready', 'ready'])}
+        with patch.object(sm, 'view_state', lambda name: next(looks[name])):
+            stream = sm.watch_states(read, interval=.01, heartbeat=99, steady=.01, settle=0)
+            first = [next(stream) for _ in range(2)]
+            self.assertEqual(sorted((r['name'], r['state']) for r in first), [('a', 'ready'), ('b', 'waking')])
+            self.assertEqual((lambda r: (r['name'], r['state']))(next(stream)), ('b', 'ready'))
+            os.write(write, b'-a\n-b\n'); os.close(write)
+            self.assertEqual(list(stream), [])
+        os.close(read)
+
     def test_old_saved_screen_is_safe_for_both_screen_and_attach(self):
         entry = dict(name='old', hold=str(self.temp / 'old.sock'))
         sm.write(sm.entry_path('old'), entry)

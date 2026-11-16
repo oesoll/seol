@@ -47,7 +47,8 @@ HELP = '''sm — sessions: where agents live and whether they are alive (tmux's 
   sm where [NAME[@HOST]]    Where NAME runs and is shown: host, workspace/tab/pane (null if none), fine_tab,
                             on_screen (a screen shows it now), last_seen. No NAME: yourself
   sm state NAME[@HOST] [--watch]   What a screen should show: asleep|stopped|waking|ready|tmux|gone (one JSON
-                            line per change with --watch, plus a heartbeat every 20 s)
+                            line per change with --watch, plus a heartbeat every 20 s). Apps: sm state - --watch
+                            [--host H] watches many in one process, names as +NAME / -NAME lines on stdin
   sm screen NAME[@HOST]     The last screen's bytes, kept when the agent ended (for apps drawing a frozen frame)
   sm restore                Resume every session whose holder died (reboot); runs at login
   sm upgrade [--dry-run]    Restart sessions running an older claude/codex or harness than is installed, once idle
@@ -731,7 +732,18 @@ def main(argv):
         emit(value, as_json)
     elif verb == 'state':
         p = argparse.ArgumentParser(prog='sm state'); p.add_argument('target'); p.add_argument('--watch', action='store_true')
-        a = p.parse_args(rest); name, host = split(a.target)
+        p.add_argument('--host')
+        a = p.parse_args(rest)
+        if a.target == '-':
+            # sm state - --watch [--host HOST]: one watcher for many names, set by +NAME / -NAME lines on stdin
+            if not a.watch:
+                raise ValueError('usage: sm state - --watch [--host HOST]   (names as +NAME / -NAME lines on stdin)')
+            if a.host and a.host != peer_core.host():
+                sm.stream(a.host, ['state', '-', '--watch', '--json'], stdin=True)
+            for row in sm.watch_states(sys.stdin.fileno()):
+                print(json.dumps(row, ensure_ascii=False), flush=True)
+            return
+        name, host = split(a.target)
         if host != peer_core.host():
             forward = ['state', name, '--json'] + (['--watch'] if a.watch else [])
             sm.stream(host, forward) if a.watch else sys.stdout.buffer.write(sm.remote(host, forward))

@@ -123,6 +123,15 @@ def peer_row(entry):
     the row of this conversation, then the most recently observed. Taking the first match read a days-old row, and the
     live harness-claude showed as gone and its pane stayed "waking" (11/08 sm feedback)."""
     sid = entry.get('session')
+    if sid and entry.get('kind') in ('claude', 'codex', 'omo'):
+        # The row of this conversation sits at a known path: read that one file. Scanning every row (691 on the Mac,
+        # 11/16) on each look of every pane's state watcher was most of what those watchers cost.
+        try:
+            row = peer_core.read(peer_core.path('sessions', peer_core.session_key(entry['kind'], sid)))
+        except ValueError:
+            row = None
+        if row:
+            return peer_core.public(row)
     rows = [row for row in peer_core.sessions()
             if (sid and row.get('session') == sid) or row.get('hold') == entry['hold']]
     if not rows:
@@ -985,6 +994,39 @@ def watch_state(name, interval=.3, heartbeat=20, steady=2.0, settle=5.0):
         time.sleep(interval if state == 'waking' or now - changed < settle else steady)
 
 
+def watch_states(fd, interval=.3, heartbeat=20, steady=2.0, settle=5.0):
+    """watch_state for many names in one process: an app showing a dozen panes ran a dozen watchers, each its own
+    Python (12 MB) polling on its own (11/16: 14 of them, 175 MB, the largest share of the Mac's Python time after a
+    reboot). The caller writes `+NAME` / `-NAME` lines to `fd` to change the set; a name it adds is answered at once.
+    Ends when `fd` closes (the app went away). Same lines and pacing per name as watch_state."""
+    import select
+    watched, pending = {}, b''
+    while True:
+        now = time.monotonic()
+        busy = any(w['seen'] == 'waking' or now - w['changed'] < settle for w in watched.values())
+        ready, _, _ = select.select([fd], [], [], interval if busy else steady)
+        if ready:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                return
+            pending += chunk
+            *lines, pending = pending.split(b'\n')
+            for line in lines:
+                text = line.decode(errors='replace').strip()
+                if text[:1] == '+' and text[1:]:
+                    watched.setdefault(text[1:], dict(seen=None, beat=0.0, changed=now))
+                elif text[:1] == '-':
+                    watched.pop(text[1:], None)
+        for name, w in list(watched.items()):
+            state = view_state(name)
+            now = time.monotonic()
+            if state != w['seen']:
+                w['changed'] = now
+            if state != w['seen'] or now - w['beat'] >= heartbeat:
+                w['seen'], w['beat'] = state, now
+                yield dict(name=name, state=state, at=time.time())
+
+
 def last_screen(name):
     """A frozen snapshot, including conversion of pre-snapshot holders' raw logs."""
     try:
@@ -1119,8 +1161,9 @@ def lane(host, argv):
     return ['-o', 'ControlMaster=auto', '-o', 'ControlPath=~/.ssh/cm-sm-l%d-%%C' % n, '-o', 'ControlPersist=60']
 
 
-def stream(host, argv):
-    """Replace this process with ssh running argv on host, output unbuffered (sm watch)."""
+def stream(host, argv, stdin=False):
+    """Replace this process with ssh running argv on host, output unbuffered (sm watch). stdin: pass ours through
+    (sm state --watch - takes its names there)."""
     command = REMOTE + ' ' + ' '.join(shlex.quote(a) for a in argv)
-    os.execvp('ssh', ['ssh', '-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=15',
+    os.execvp('ssh', ['ssh'] + ([] if stdin else ['-n']) + ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=15',
                       '-o', 'LogLevel=QUIET'] + lane(host, argv) + [alias(host), command])
