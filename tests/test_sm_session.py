@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # The installed layout (session layer, peer and peer-hold in one folder): tests/run.sh assembles it in SEOL_BIN.
@@ -279,6 +280,34 @@ class SmSessionTests(unittest.TestCase):
             with patch.object(sm, 'peer_row', lambda entry: dict(state='working')):
                 os.utime(engine, (time.time() + 5, time.time() + 5))
                 self.assertEqual(sm.upgrade(engines=False)['upgrade'][0]['hold'], 'it is working')
+
+    def test_a_codex_that_does_not_start_is_rolled_back_and_never_restarted_into(self):
+        # 11/18: an update left codex unable to start and every Codex session sm restarted into it ended.
+        installed = []
+        versions = iter(['0.168.0', '', '0.168.0'])   # before, after the bad install, after going back
+        view = SimpleNamespace(stdout='0.169.1\n', returncode=0)
+        with patch.object(sm, 'engine_version', lambda kind='codex': next(versions)), \
+                patch.object(sm, 'install_codex', lambda v: installed.append(v) or (True, '')), \
+                patch.object(sm.subprocess, 'run', lambda *a, **k: view):
+            result = sm.update_engines(force=True)
+        self.assertEqual(installed, ['0.169.1', '0.168.0'])
+        self.assertEqual((result['installed'], result['rolled_back']), (None, '0.168.0'))
+        self.assertIn('does not start', result['error'])
+
+        self.spawn('cx')
+        e = sm.load('cx'); e['kind'] = 'codex'; e['started'] = time.time() - 3600; e['session'] = 'c-1'
+        sm.write(sm.entry_path('cx'), e)
+        engine = self.temp / 'codex-new'; engine.write_text('new'); os.utime(engine, (time.time(), time.time()))
+        with patch.object(sm, 'tools', lambda: {'codex': str(engine)}), \
+                patch.object(sm, 'engine_version', lambda kind='codex': ''), \
+                patch.object(sm, 'peer_row', lambda entry: dict(state='idle')), \
+                patch.object(sm, 'quiet_since', lambda entry, row: time.time() - 600), \
+                patch.object(sm, 'looked_at', lambda entry: False), \
+                patch.object(sm, 'background_work', lambda entry: False), \
+                patch.object(sm, 'resumable', lambda entry: True):
+            done = sm.upgrade(engines=False)['upgrade']
+        self.assertEqual((done[0]['action'], done[0]['hold']), ('pending', 'the installed codex does not start'))
+        self.assertEqual(sm.status(sm.load('cx')), 'running')
 
     def test_an_upgrade_that_cannot_restart_leaves_the_session_asleep(self):
         """Ended by the upgrade, not by anyone: a message or a look must still bring it back. A start that dies after

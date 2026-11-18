@@ -763,8 +763,31 @@ def quiet_since(entry, row):
     return max(row.get('since') or 0, entry.get('started') or 0)
 
 
+def engine_version(kind='codex'):
+    """The version a login shell's `codex --version` prints, or '' when it does not run. An install can leave codex
+    unable to start (11/18: 0.169.1 came without its platform package, "Missing optional dependency")."""
+    try:
+        out = subprocess.run([os.environ.get('SHELL') or '/bin/sh', '-lc', kind + ' --version'], capture_output=True,
+                             text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    words = out.stdout.strip().split()
+    return words[-1] if out.returncode == 0 and words and re.fullmatch(r'[0-9][0-9.]*\S*', words[-1]) else ''
+
+
+def install_codex(version):
+    path = tools().get('codex') or ''
+    cmd = ['mise', 'use', '-g', 'codex@' + version] if '/mise/' in path else ['npm', 'install', '-g', '@openai/codex@' + version]
+    done = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    global _tools
+    _tools = None
+    return done.returncode == 0, (done.stderr or done.stdout)[-300:]
+
+
 def update_engines(force=False):
-    """Codex at the latest release (Claude installs its own updates). At most once an hour; never fails the job."""
+    """Codex at the latest release (Claude installs its own updates). At most once an hour; never fails the job.
+    After an install it checks that codex starts, and goes back to the version that worked when it does not; a codex
+    broken by anything else (its own updater) is reinstalled at the latest release."""
     mark = state_dir() / 'engines.json'
     seen = read(mark)
     if not force and time.time() - seen.get('checked', 0) < ENGINE_CHECK_EVERY:
@@ -772,24 +795,23 @@ def update_engines(force=False):
     result = {}
     try:
         latest = subprocess.run(['npm', 'view', '@openai/codex', 'version'], capture_output=True, text=True, timeout=60).stdout.strip()
-        have = subprocess.run([os.environ.get('SHELL') or '/bin/sh', '-lc', 'codex --version'], capture_output=True, text=True,
-                              timeout=30).stdout.strip().split()[-1:]
-        have = have[0] if have else ''
-        result = dict(codex=have, latest=latest)
-        if latest and have and latest != have and re.fullmatch(r'[0-9.]+', latest):
-            path = tools().get('codex') or ''
-            if '/mise/' in path:
-                cmd = ['mise', 'use', '-g', 'codex@' + latest]
+        have = engine_version()
+        good = have or seen.get('working')  # the last version seen starting, to go back to
+        result = dict(codex=have, latest=latest, working=good)
+        if latest and latest != have and re.fullmatch(r'[0-9.]+', latest):
+            ok, error = install_codex(latest)
+            now = engine_version()
+            if ok and now:
+                result.update(installed=now, codex=now, working=now)
             else:
-                cmd = ['npm', 'install', '-g', '@openai/codex@' + latest]
-            done = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            result.update(installed=latest if done.returncode == 0 else None,
-                          error=None if done.returncode == 0 else (done.stderr or done.stdout)[-300:])
-            global _tools
-            _tools = None
+                result.update(installed=None, error=('installed but codex does not start: ' if ok else '') + error)
+                if good and good != latest:
+                    back, _ = install_codex(good)
+                    after = engine_version() if back else ''
+                    result.update(rolled_back=good if after else None, codex=after)
     except (OSError, subprocess.SubprocessError) as error:
-        result = dict(error=str(error)[-300:])
-    write(mark, dict(checked=time.time(), result=result))
+        result = dict(error=str(error)[-300:], working=seen.get('working'))
+    write(mark, dict(checked=time.time(), result=result, working=result.get('working')))
     return result
 
 
@@ -801,6 +823,7 @@ def upgrade(dry_run=False, engines=True):
     done = []
     engine = update_engines() if engines and not dry_run else None
     now = time.time()
+    codex_starts = None  # asked once, and only when a Codex session is due
     for entry in entries():
         if entry.get('host') != peer_core.host() or entry.get('kind') not in ('claude', 'codex') or status(entry) != 'running':
             continue
@@ -811,7 +834,13 @@ def upgrade(dry_run=False, engines=True):
         row = peer_row(entry)
         wait = UPGRADE_IDLE_ON_SCREEN if looked_at(entry) else UPGRADE_IDLE
         hold = None
-        if not row:
+        if entry['kind'] == 'codex' and not dry_run and codex_starts is None:
+            codex_starts = bool(engine_version())
+        if entry['kind'] == 'codex' and not dry_run and not codex_starts:
+            # Restarting into a codex that cannot start ended five sessions at once (11/18). Running ones keep
+            # the codex they loaded; wait for a working install.
+            hold = 'the installed codex does not start'
+        elif not row:
             hold = 'peer does not list it (its state is unknown)'
         elif row['state'] != 'idle':
             hold = 'it is ' + str(row['state'])
