@@ -255,7 +255,9 @@ def start_holder(entry, command):
         trust_folder(entry['cwd'])
     for stale in (sock.with_suffix('.exit'),):
         stale.unlink(missing_ok=True)
-    env = list(entry.get('env', []))
+    # A caller's own PATH (Fine passes --env PATH=…) went in last and replaced the merged one, so a Fine tab had no
+    # ~/bin and no `fine` CLI (11/18 sm feedback). It joins the user's PATH like every other.
+    env = [('PATH=' + merged_path(e[5:])) if e.startswith('PATH=') else e for e in entry.get('env', [])]
     result = subprocess.run(scope_prefix(sock) + [str(BIN / 'peer-hold'), 'start', '--sock', str(sock), '--cwd', entry['cwd']]
                             + [a for e in env for a in ('--env', e)] + ['--'] + command,
                             capture_output=True, text=True, timeout=15, env=env_vars)

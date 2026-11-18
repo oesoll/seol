@@ -151,6 +151,13 @@ class SmSessionTests(unittest.TestCase):
         self.assertEqual(sent[0]['body'], sm.REBOOT_NOTE % sm.peer_core.host())
         self.assertEqual(sent[0]['sender']['id'], 'service:sm')
 
+    def test_a_path_the_caller_passes_keeps_the_users_folders(self):
+        # Fine passes --env PATH=<its own>; that replaced the merged PATH and a Fine tab had no ~/bin (11/18).
+        with patch.object(sm, 'user_path', lambda: '/home/u/bin:/usr/bin:/bin'), \
+                patch.object(sm, 'launcher', lambda kind, args: ['/bin/sh', '-c', 'echo "PATH=$PATH"; sleep 60']):
+            sm.spawn('pathy', 'claude', str(self.work), env=['PATH=/app/bin:/usr/bin'], timeout=.3)
+        self.assertIn('PATH=/home/u/bin:/usr/bin:/bin:/app/bin', self.tail('pathy'))
+
     def test_stopped_stays_stopped_until_asked(self):
         self.spawn()
         entry = sm.load('lane'); entry['session'] = 'sid-2'; sm.write(sm.entry_path('lane'), entry)
