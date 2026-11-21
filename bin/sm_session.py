@@ -82,7 +82,25 @@ def holder_alive(entry):
             s.connect(sock)
             return True
         except OSError:
-            return False
+            pass
+    # A busy holder can miss a connect (11/22: fishing-codex-2's did, sm took it for dead and started a second
+    # holder on the same socket; both Codex TUIs then fought over one conversation, "open in another app"). The
+    # holder's own process settles it: a peer-hold still running for this socket is alive.
+    pid = read(Path(sock).with_suffix('.json')).get('holder')
+    return bool(pid) and holds_socket(pid, sock)
+
+
+def holds_socket(pid, sock):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    try:
+        args = subprocess.run(['ps', '-o', 'command=', '-p', str(int(pid))], capture_output=True, text=True,
+                              timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True  # it exists and ps would not say what it is: do not start a second one over it
+    return 'peer-hold' in args and sock in args
 
 
 def in_tmux(entry):

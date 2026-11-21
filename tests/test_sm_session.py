@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -119,6 +120,21 @@ class SmSessionTests(unittest.TestCase):
         self.assertEqual(sorted(results), ['already-running'] * 3 + ['spawned'])
         holders = list((self.temp / 'sm/hold').glob('*.json'))
         self.assertEqual(len(holders), 1)
+
+    def test_a_holder_that_misses_a_connect_is_still_alive(self):
+        # 11/22: a busy holder missed the connect, sm started a second holder on the same socket.
+        self.spawn()
+        entry = sm.load('lane')
+        real = socket.socket
+        class Refusing(real):
+            def connect(self, address):
+                raise ConnectionRefusedError('busy')
+        with patch.object(sm.socket, 'socket', Refusing):
+            self.assertEqual(sm.status(entry), 'running')
+            self.assertEqual(self.spawn()['action'], 'already-running')
+        self.kill_holder()
+        with patch.object(sm.socket, 'socket', Refusing):
+            self.assertEqual(sm.status(sm.load('lane')), 'dead', 'a holder that is gone is still dead')
 
     def test_dead_session_resumes_by_name(self):
         self.spawn()
